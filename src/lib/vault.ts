@@ -1,22 +1,13 @@
-import { access, mkdir, readFile, writeFile } from "fs/promises"
-import path from "path"
 import { decryptData, encryptData, InvalidPasswordError, type EncryptedPayload } from "@/lib/crypto"
+import {
+  storageReadVault,
+  storageVaultExists,
+  storageWriteVault,
+} from "@/lib/storage"
 import type { VaultData } from "@/types/vault"
 
-const VAULT_DIR = path.join(process.cwd(), "data")
-const VAULT_PATH = path.join(VAULT_DIR, "vault.json")
-
 export async function vaultExists() {
-  try {
-    await access(VAULT_PATH)
-    return true
-  } catch {
-    return false
-  }
-}
-
-async function ensureVaultDir() {
-  await mkdir(VAULT_DIR, { recursive: true })
+  return await storageVaultExists()
 }
 
 export async function initializeVault(masterPassword: string) {
@@ -35,8 +26,7 @@ export async function initializeVault(masterPassword: string) {
   }
 
   const encrypted = await encryptData(emptyVault, masterPassword)
-  await ensureVaultDir()
-  await writeFile(VAULT_PATH, JSON.stringify(encrypted, null, 2), "utf8")
+  await storageWriteVault(JSON.stringify(encrypted, null, 2))
 }
 
 export async function loadVault(masterPassword: string): Promise<VaultData> {
@@ -48,7 +38,7 @@ export async function loadVault(masterPassword: string): Promise<VaultData> {
     throw new Error("Vault not initialized")
   }
 
-  const raw = await readFile(VAULT_PATH, "utf8")
+  const raw = await storageReadVault()
   const payload = JSON.parse(raw) as EncryptedPayload
 
   try {
@@ -75,6 +65,5 @@ export async function saveVault(masterPassword: string, data: VaultData) {
   await loadVault(masterPassword)
 
   const encrypted = await encryptData(data, masterPassword)
-  await ensureVaultDir()
-  await writeFile(VAULT_PATH, JSON.stringify(encrypted, null, 2), "utf8")
+  await storageWriteVault(JSON.stringify(encrypted, null, 2))
 }
