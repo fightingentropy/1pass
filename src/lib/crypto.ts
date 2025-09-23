@@ -9,6 +9,21 @@ const TAG_LENGTH = 16
 const textEncoder = new TextEncoder()
 const textDecoder = new TextDecoder()
 
+function toArrayBuffer(view: Uint8Array): ArrayBuffer {
+  const { buffer, byteOffset, byteLength } = view
+
+  if (buffer instanceof ArrayBuffer) {
+    if (byteOffset === 0 && byteLength === buffer.byteLength) {
+      return buffer
+    }
+    return buffer.slice(byteOffset, byteOffset + byteLength)
+  }
+
+  const copy = new Uint8Array(byteLength)
+  copy.set(view)
+  return copy.buffer
+}
+
 let resolvedCrypto: Crypto | null =
   typeof globalThis.crypto !== "undefined" && "subtle" in globalThis.crypto
     ? (globalThis.crypto as Crypto)
@@ -72,7 +87,7 @@ async function deriveAesKey(password: string, salt: Uint8Array, iterations: numb
       name: "PBKDF2",
       hash: "SHA-256",
       iterations,
-      salt,
+      salt: toArrayBuffer(salt),
     },
     keyMaterial,
     {
@@ -177,4 +192,3 @@ export const CRYPTO_CONSTANTS = {
   IV_LENGTH,
   TAG_LENGTH,
 } as const
-
