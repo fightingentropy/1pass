@@ -65,7 +65,7 @@ export async function storageReadVault() {
 export async function storageWriteVault(contents: string) {
   if (isBlobEnabled()) {
     await put(BLOB_PATH, contents, {
-      access: "public",
+      access: "private",
       contentType: "application/json",
       addRandomSuffix: false,
       allowOverwrite: true,

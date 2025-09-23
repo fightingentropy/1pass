@@ -1,8 +1,94 @@
-import { createCipheriv, createDecipheriv, pbkdf2 as pbkdf2Callback, randomBytes } from "crypto"
-
 const PBKDF2_ITERATIONS = 310_000
-const KEY_LENGTH = 32
-const ALGORITHM = "aes-256-gcm"
+const MIN_ITERATIONS = 100_000
+const MAX_ITERATIONS = 600_000
+const KEY_LENGTH = 256
+const SALT_LENGTH = 16
+const IV_LENGTH = 12
+const TAG_LENGTH = 16
+
+const textEncoder = new TextEncoder()
+const textDecoder = new TextDecoder()
+
+let resolvedCrypto: Crypto | null =
+  typeof globalThis.crypto !== "undefined" && "subtle" in globalThis.crypto
+    ? (globalThis.crypto as Crypto)
+    : null
+
+async function getCrypto(): Promise<Crypto> {
+  if (resolvedCrypto) {
+    return resolvedCrypto
+  }
+
+  if (typeof process !== "undefined" && typeof process.versions?.node === "string") {
+    const { webcrypto } = await import("crypto")
+    resolvedCrypto = webcrypto as unknown as Crypto
+    return resolvedCrypto
+  }
+
+  throw new Error("Web Crypto API is not available in this environment")
+}
+
+function toBase64(bytes: Uint8Array) {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(bytes).toString("base64")
+  }
+
+  let binary = ""
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+
+  return btoa(binary)
+}
+
+function fromBase64(value: string) {
+  if (typeof Buffer !== "undefined") {
+    return new Uint8Array(Buffer.from(value, "base64"))
+  }
+
+  const binary = atob(value)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+
+  return bytes
+}
+
+async function deriveAesKey(password: string, salt: Uint8Array, iterations: number) {
+  const crypto = await getCrypto()
+  const subtle = crypto.subtle
+
+  const keyMaterial = await subtle.importKey(
+    "raw",
+    textEncoder.encode(password),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"]
+  )
+
+  return await subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      hash: "SHA-256",
+      iterations,
+      salt,
+    },
+    keyMaterial,
+    {
+      name: "AES-GCM",
+      length: KEY_LENGTH,
+    },
+    false,
+    ["encrypt", "decrypt"]
+  )
+}
+
+function validateIterationCount(iterations: number) {
+  if (!Number.isInteger(iterations) || iterations < MIN_ITERATIONS || iterations > MAX_ITERATIONS) {
+    throw new Error("Unsupported PBKDF2 iteration count")
+  }
+}
 
 export class InvalidPasswordError extends Error {
   constructor() {
@@ -20,53 +106,75 @@ export type EncryptedPayload = {
   tag: string
 }
 
-function pbkdf2(password: string, salt: Buffer, iterations: number) {
-  return new Promise<Buffer>((resolve, reject) => {
-    pbkdf2Callback(password, salt, iterations, KEY_LENGTH, "sha256", (err, derivedKey) => {
-      if (err) {
-        reject(err)
-        return
-      }
-
-      resolve(derivedKey)
-    })
-  })
-}
-
 export async function encryptData<T>(payload: T, password: string): Promise<EncryptedPayload> {
-  const salt = randomBytes(16)
-  const iv = randomBytes(12)
-  const key = await pbkdf2(password, salt, PBKDF2_ITERATIONS)
-  const cipher = createCipheriv(ALGORITHM, key, iv)
-  const json = JSON.stringify(payload)
-  const encrypted = Buffer.concat([cipher.update(json, "utf8"), cipher.final()])
-  const tag = cipher.getAuthTag()
+  if (!password) {
+    throw new Error("Password is required to encrypt data")
+  }
+
+  const crypto = await getCrypto()
+
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LENGTH))
+  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH))
+  const key = await deriveAesKey(password, salt, PBKDF2_ITERATIONS)
+
+  const message = textEncoder.encode(JSON.stringify(payload))
+  const encryptedBytes = new Uint8Array(
+    await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, message)
+  )
+
+  const tag = encryptedBytes.slice(encryptedBytes.length - TAG_LENGTH)
+  const ciphertext = encryptedBytes.slice(0, encryptedBytes.length - TAG_LENGTH)
 
   return {
     version: 1,
     iterations: PBKDF2_ITERATIONS,
-    salt: salt.toString("base64"),
-    iv: iv.toString("base64"),
-    ciphertext: encrypted.toString("base64"),
-    tag: tag.toString("base64"),
+    salt: toBase64(salt),
+    iv: toBase64(iv),
+    ciphertext: toBase64(ciphertext),
+    tag: toBase64(tag),
   }
 }
 
 export async function decryptData<T>(payload: EncryptedPayload, password: string): Promise<T> {
-  const { salt, iv, ciphertext, tag, iterations } = payload
-  const saltBuffer = Buffer.from(salt, "base64")
-  const ivBuffer = Buffer.from(iv, "base64")
-  const cipherBuffer = Buffer.from(ciphertext, "base64")
-  const tagBuffer = Buffer.from(tag, "base64")
-  const key = await pbkdf2(password, saltBuffer, iterations ?? PBKDF2_ITERATIONS)
-  const decipher = createDecipheriv(ALGORITHM, key, ivBuffer)
+  if (!password) {
+    throw new Error("Password is required to decrypt data")
+  }
 
-  decipher.setAuthTag(tagBuffer)
+  const crypto = await getCrypto()
+  const subtle = crypto.subtle
+
+  const iterations = payload.iterations ?? PBKDF2_ITERATIONS
+  validateIterationCount(iterations)
+
+  const salt = fromBase64(payload.salt)
+  const iv = fromBase64(payload.iv)
+  const ciphertext = fromBase64(payload.ciphertext)
+  const tag = fromBase64(payload.tag)
+
+  const combined = new Uint8Array(ciphertext.length + tag.length)
+  combined.set(ciphertext)
+  combined.set(tag, ciphertext.length)
 
   try {
-    const decrypted = Buffer.concat([decipher.update(cipherBuffer), decipher.final()])
-    return JSON.parse(decrypted.toString("utf8")) as T
-  } catch {
-    throw new InvalidPasswordError()
+    const key = await deriveAesKey(password, salt, iterations)
+    const decrypted = await subtle.decrypt({ name: "AES-GCM", iv }, key, combined)
+    const json = textDecoder.decode(decrypted)
+    return JSON.parse(json) as T
+  } catch (error) {
+    if (error instanceof DOMException || error instanceof SyntaxError) {
+      throw new InvalidPasswordError()
+    }
+
+    throw error
   }
 }
+
+export const CRYPTO_CONSTANTS = {
+  PBKDF2_ITERATIONS,
+  MIN_ITERATIONS,
+  MAX_ITERATIONS,
+  SALT_LENGTH,
+  IV_LENGTH,
+  TAG_LENGTH,
+} as const
+

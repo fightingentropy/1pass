@@ -1,69 +1,70 @@
-import { decryptData, encryptData, InvalidPasswordError, type EncryptedPayload } from "@/lib/crypto"
+import type { EncryptedPayload } from "@/lib/crypto"
 import {
   storageReadVault,
   storageVaultExists,
   storageWriteVault,
 } from "@/lib/storage"
-import type { VaultData } from "@/types/vault"
+
+function assertEncryptedPayload(payload: unknown): asserts payload is EncryptedPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Encrypted payload is malformed")
+  }
+
+  const candidate = payload as Partial<EncryptedPayload>
+
+  if (
+    candidate.version !== 1 ||
+    typeof candidate.iterations !== "number" ||
+    typeof candidate.salt !== "string" ||
+    typeof candidate.iv !== "string" ||
+    typeof candidate.ciphertext !== "string" ||
+    typeof candidate.tag !== "string"
+  ) {
+    throw new Error("Encrypted payload is malformed")
+  }
+}
 
 export async function vaultExists() {
   return await storageVaultExists()
 }
 
-export async function initializeVault(masterPassword: string) {
-  if (!masterPassword) {
-    throw new Error("Master password is required")
-  }
+export async function initializeVault(payload: EncryptedPayload) {
+  assertEncryptedPayload(payload)
 
   if (await vaultExists()) {
     throw new Error("Vault already exists")
   }
 
-  const emptyVault: VaultData = {
-    passwords: [],
-    cards: [],
-    identities: [],
-  }
-
-  const encrypted = await encryptData(emptyVault, masterPassword)
-  await storageWriteVault(JSON.stringify(encrypted, null, 2))
+  await storageWriteVault(JSON.stringify(payload, null, 2))
 }
 
-export async function loadVault(masterPassword: string): Promise<VaultData> {
-  if (!masterPassword) {
-    throw new Error("Master password is required")
-  }
-
+export async function loadVault(): Promise<EncryptedPayload> {
   if (!(await vaultExists())) {
     throw new Error("Vault not initialized")
   }
 
   const raw = await storageReadVault()
-  const payload = JSON.parse(raw) as EncryptedPayload
 
   try {
-    return await decryptData<VaultData>(payload, masterPassword)
+    const parsed = JSON.parse(raw) as unknown
+    assertEncryptedPayload(parsed)
+    return parsed
   } catch (error) {
-    if (error instanceof InvalidPasswordError) {
-      throw error
+    if (error instanceof SyntaxError) {
+      throw new Error("Stored vault is not valid JSON")
     }
 
-    throw new Error("Failed to decrypt vault")
+    throw error
   }
 }
 
-export async function saveVault(masterPassword: string, data: VaultData) {
-  if (!masterPassword) {
-    throw new Error("Master password is required")
-  }
+export async function saveVault(payload: EncryptedPayload) {
+  assertEncryptedPayload(payload)
 
   if (!(await vaultExists())) {
     throw new Error("Vault not initialized")
   }
 
-  // Validate the password against the current vault before overwriting.
-  await loadVault(masterPassword)
-
-  const encrypted = await encryptData(data, masterPassword)
-  await storageWriteVault(JSON.stringify(encrypted, null, 2))
+  await storageWriteVault(JSON.stringify(payload, null, 2))
 }
+

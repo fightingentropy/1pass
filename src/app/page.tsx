@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { decryptData, encryptData, InvalidPasswordError, type EncryptedPayload } from "@/lib/crypto"
 import { cn } from "@/lib/utils"
 import type {
   CardEntry,
@@ -181,10 +182,17 @@ export default function Home() {
 
       setIsInitializing(true)
       try {
+        const emptyVault: VaultData = {
+          passwords: [],
+          cards: [],
+          identities: [],
+        }
+
+        const payload = await encryptData(emptyVault, setupPassword)
         const res = await fetch("/api/vault/init", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ masterPassword: setupPassword }),
+          body: JSON.stringify({ payload }),
         })
 
         if (!res.ok) {
@@ -218,25 +226,25 @@ export default function Home() {
 
       setIsUnlocking(true)
       try {
-        const res = await fetch("/api/vault/load", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ masterPassword: loginPassword }),
-        })
+        const res = await fetch("/api/vault/load")
+        const body = (await res.json().catch(() => null)) as { payload?: EncryptedPayload; error?: string } | null
 
-        if (!res.ok) {
-          const payload = (await res.json().catch(() => null)) as { error?: string } | null
-          throw new Error(payload?.error ?? "Failed to unlock vault")
+        if (!res.ok || !body?.payload) {
+          throw new Error(body?.error ?? "Failed to unlock vault")
         }
 
-        const payload = (await res.json()) as { data: VaultData }
-        setVaultData(payload.data)
+        const decrypted = await decryptData<VaultData>(body.payload, loginPassword)
+        setVaultData(decrypted)
         setSessionPassword(loginPassword)
         setLoginPassword("")
         setFeedback({ type: "success", message: "Vault unlocked." })
       } catch (error) {
         console.error(error)
-        setFeedback({ type: "error", message: error instanceof Error ? error.message : "Unable to unlock vault." })
+        if (error instanceof InvalidPasswordError) {
+          setFeedback({ type: "error", message: "Invalid master password." })
+        } else {
+          setFeedback({ type: "error", message: error instanceof Error ? error.message : "Unable to unlock vault." })
+        }
       } finally {
         setIsUnlocking(false)
       }
@@ -261,10 +269,11 @@ export default function Home() {
       setFeedback(null)
 
       try {
+        const payload = await encryptData(data, sessionPassword)
         const res = await fetch("/api/vault/save", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ masterPassword: sessionPassword, data }),
+          body: JSON.stringify({ payload }),
         })
 
         if (!res.ok) {

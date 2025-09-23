@@ -17,6 +17,12 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 During local development the encrypted vault is persisted in `data/vault.json`. This mirrors the structure used in production, making it easy to inspect or reset the vault while iterating locally.
 
+### Security model
+
+- All encryption and decryption happens in the browser using the Web Crypto API, so the master password never leaves the device.
+- API routes only shuttle the encrypted payload to disk (local filesystem or Vercel Blob) and never see plaintext secrets.
+- Encrypted payloads include algorithm metadata and integrity tags; tampered PBKDF2 iteration counts are rejected to avoid resource exhaustion attacks.
+
 ## Deploying to Vercel
 
 1. Enable **Vercel Blob** for the project from the Vercel dashboard (`Storage → Blob`).
@@ -24,7 +30,7 @@ During local development the encrypted vault is persisted in `data/vault.json`. 
 3. Optionally customise `VAULT_BLOB_PREFIX` or `VAULT_BLOB_KEY` if you need a different location for the encrypted vault record.
 4. Redeploy the project. On the first launch, initialise the vault through the UI or by calling `POST /api/vault/init`.
 
-> **Note:** Vercel Blob currently exposes files via signed URLs. The vault contents remain encrypted, but anyone with access to the blob URL could download the ciphertext. Keep master passwords secret and rotate the blob token if it leaks.
+> **Note:** Vault blobs are uploaded with private access. Reads require a signed URL issued via the Blob API, keeping ciphertext distribution under your control. Continue to protect the blob token and rotate it if you suspect a leak.
 
 ## Environment variables
 
