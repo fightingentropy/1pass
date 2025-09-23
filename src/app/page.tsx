@@ -1,0 +1,722 @@
+"use client"
+
+import { useCallback, useEffect, useMemo, useState } from "react"
+
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardAction,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Separator } from "@/components/ui/separator"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Textarea } from "@/components/ui/textarea"
+import { cn } from "@/lib/utils"
+import type {
+  CardEntry,
+  IdentityEntry,
+  PasswordEntry,
+  VaultCategory,
+  VaultData,
+} from "@/types/vault"
+
+const generateId = () => {
+  const cryptoObj = globalThis.crypto as Crypto | undefined
+  if (cryptoObj?.randomUUID) {
+    return cryptoObj.randomUUID()
+  }
+
+  return Math.random().toString(36).slice(2)
+}
+
+type VaultItem = PasswordEntry | CardEntry | IdentityEntry
+
+type DialogState = {
+  category: VaultCategory
+  mode: "create" | "edit"
+  item?: VaultItem
+}
+
+type FeedbackState = {
+  type: "success" | "error"
+  message: string
+}
+
+type CategoryConfig<T extends VaultItem> = {
+  title: string
+  singular: string
+  description: string
+  fields: Array<{
+    key: keyof T
+    label: string
+    placeholder?: string
+    type?: string
+    multiline?: boolean
+  }>
+}
+
+const CATEGORY_CONFIG: {
+  passwords: CategoryConfig<PasswordEntry>
+  cards: CategoryConfig<CardEntry>
+  identities: CategoryConfig<IdentityEntry>
+} = {
+  passwords: {
+    title: "Passwords",
+    singular: "Password",
+    description: "Store credentials for websites and applications.",
+    fields: [
+      { key: "name", label: "Label", placeholder: "Email" },
+      { key: "username", label: "Username", placeholder: "you@example.com" },
+      { key: "password", label: "Password", type: "password" },
+      { key: "url", label: "URL", placeholder: "https://" },
+      { key: "notes", label: "Notes", multiline: true, placeholder: "Additional context" },
+    ],
+  },
+  cards: {
+    title: "Cards",
+    singular: "Card",
+    description: "Securely keep payment information on hand.",
+    fields: [
+      { key: "name", label: "Label", placeholder: "Personal Visa" },
+      { key: "cardholder", label: "Cardholder Name" },
+      { key: "number", label: "Number", placeholder: "0000 0000 0000 0000" },
+      { key: "expiryMonth", label: "Expiry Month", placeholder: "MM" },
+      { key: "expiryYear", label: "Expiry Year", placeholder: "YYYY" },
+      { key: "cvv", label: "Security Code", placeholder: "123" },
+      { key: "notes", label: "Notes", multiline: true, placeholder: "Usage notes" },
+    ],
+  },
+  identities: {
+    title: "Identities",
+    singular: "Identity",
+    description: "Keep track of personal profile details.",
+    fields: [
+      { key: "name", label: "Name" },
+      { key: "email", label: "Email", placeholder: "you@example.com" },
+      { key: "phone", label: "Phone" },
+      { key: "address", label: "Address", multiline: true },
+      { key: "notes", label: "Notes", multiline: true },
+    ],
+  },
+}
+
+export default function Home() {
+  const [vaultExists, setVaultExists] = useState<boolean | null>(null)
+  const [vaultData, setVaultData] = useState<VaultData | null>(null)
+  const [sessionPassword, setSessionPassword] = useState<string | null>(null)
+
+  const [setupPassword, setSetupPassword] = useState("")
+  const [confirmPassword, setConfirmPassword] = useState("")
+  const [loginPassword, setLoginPassword] = useState("")
+
+  const [isInitializing, setIsInitializing] = useState(false)
+  const [isUnlocking, setIsUnlocking] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+
+  const [feedback, setFeedback] = useState<FeedbackState | null>(null)
+  const [pageError, setPageError] = useState<string | null>(null)
+
+  const [dialogState, setDialogState] = useState<DialogState | null>(null)
+  const [formState, setFormState] = useState<Record<string, string>>({})
+
+  const [activeTab, setActiveTab] = useState<VaultCategory>("passwords")
+
+  const unlocked = useMemo(() => vaultData !== null && sessionPassword !== null, [vaultData, sessionPassword])
+
+  useEffect(() => {
+    if (!dialogState) {
+      setFormState({})
+      return
+    }
+
+    const config = CATEGORY_CONFIG[dialogState.category]
+    const initial: Record<string, string> = {}
+
+    for (const field of config.fields) {
+      const value = dialogState.item ? (dialogState.item as Record<string, string>)[field.key as string] ?? "" : ""
+      initial[field.key as string] = value
+    }
+
+    setFormState(initial)
+  }, [dialogState])
+
+  const checkVaultStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/vault/status")
+      if (!res.ok) {
+        throw new Error("Failed to determine vault status")
+      }
+      const payload = (await res.json()) as { exists: boolean }
+      setVaultExists(payload.exists)
+    } catch (error) {
+      setPageError("Unable to reach the vault service. Refresh to try again.")
+      console.error(error)
+    }
+  }, [])
+
+  useEffect(() => {
+    void checkVaultStatus()
+  }, [checkVaultStatus])
+
+  const handleInitialize = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      setFeedback(null)
+
+      if (!setupPassword.trim()) {
+        setFeedback({ type: "error", message: "Choose a master password." })
+        return
+      }
+
+      if (setupPassword !== confirmPassword) {
+        setFeedback({ type: "error", message: "Passwords do not match." })
+        return
+      }
+
+      setIsInitializing(true)
+      try {
+        const res = await fetch("/api/vault/init", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ masterPassword: setupPassword }),
+        })
+
+        if (!res.ok) {
+          const payload = (await res.json().catch(() => null)) as { error?: string } | null
+          throw new Error(payload?.error ?? "Failed to initialize vault")
+        }
+
+        setVaultExists(true)
+        setSetupPassword("")
+        setConfirmPassword("")
+        setFeedback({ type: "success", message: "Vault initialized. Unlock it with your master password." })
+      } catch (error) {
+        console.error(error)
+        setFeedback({ type: "error", message: error instanceof Error ? error.message : "Unable to initialize vault." })
+      } finally {
+        setIsInitializing(false)
+      }
+    },
+    [confirmPassword, setupPassword]
+  )
+
+  const handleUnlock = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      setFeedback(null)
+
+      if (!loginPassword.trim()) {
+        setFeedback({ type: "error", message: "Enter your master password." })
+        return
+      }
+
+      setIsUnlocking(true)
+      try {
+        const res = await fetch("/api/vault/load", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ masterPassword: loginPassword }),
+        })
+
+        if (!res.ok) {
+          const payload = (await res.json().catch(() => null)) as { error?: string } | null
+          throw new Error(payload?.error ?? "Failed to unlock vault")
+        }
+
+        const payload = (await res.json()) as { data: VaultData }
+        setVaultData(payload.data)
+        setSessionPassword(loginPassword)
+        setLoginPassword("")
+        setFeedback({ type: "success", message: "Vault unlocked." })
+      } catch (error) {
+        console.error(error)
+        setFeedback({ type: "error", message: error instanceof Error ? error.message : "Unable to unlock vault." })
+      } finally {
+        setIsUnlocking(false)
+      }
+    },
+    [loginPassword]
+  )
+
+  const handleLock = useCallback(() => {
+    setVaultData(null)
+    setSessionPassword(null)
+    setFeedback({ type: "success", message: "Vault locked." })
+  }, [])
+
+  const persistVault = useCallback(
+    async (data: VaultData, successMessage: string) => {
+      if (!sessionPassword) {
+        setFeedback({ type: "error", message: "Unlock the vault to continue." })
+        return false
+      }
+
+      setIsSaving(true)
+      setFeedback(null)
+
+      try {
+        const res = await fetch("/api/vault/save", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ masterPassword: sessionPassword, data }),
+        })
+
+        if (!res.ok) {
+          const payload = (await res.json().catch(() => null)) as { error?: string } | null
+          throw new Error(payload?.error ?? "Failed to save vault")
+        }
+
+        setVaultData(data)
+        setFeedback({ type: "success", message: successMessage })
+        return true
+      } catch (error) {
+        console.error(error)
+        setFeedback({ type: "error", message: error instanceof Error ? error.message : "Unable to save vault." })
+        return false
+      } finally {
+        setIsSaving(false)
+      }
+    },
+    [sessionPassword]
+  )
+
+  const handleDialogSubmit = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      if (!dialogState || !vaultData) {
+        return
+      }
+
+      const { category, mode, item } = dialogState
+      const config = CATEGORY_CONFIG[category]
+      const updatedVault: VaultData = structuredClone(vaultData)
+      const entries = updatedVault[category]
+      const base: Record<string, string> = mode === "edit" && item ? { ...item } : { id: generateId() }
+
+      for (const field of config.fields) {
+        base[field.key as string] = (formState[field.key as string] ?? "").trim()
+      }
+
+      if (!base.name) {
+        setFeedback({ type: "error", message: "A name or label is required." })
+        return
+      }
+
+      const typedEntry = base as VaultItem
+
+      if (mode === "edit" && item) {
+        const idx = entries.findIndex((entry) => entry.id === item.id)
+        if (idx !== -1) {
+          entries[idx] = typedEntry as never
+        }
+      } else {
+        entries.unshift(typedEntry as never)
+      }
+
+      const ok = await persistVault(updatedVault, mode === "edit" ? "Entry updated." : "Entry added.")
+      if (ok) {
+        setDialogState(null)
+      }
+    },
+    [dialogState, formState, persistVault, vaultData]
+  )
+
+  const handleDelete = useCallback(
+    async (category: VaultCategory, id: string) => {
+      if (!vaultData) {
+        return
+      }
+
+      const updatedVault: VaultData = structuredClone(vaultData)
+      updatedVault[category] = updatedVault[category].filter((entry) => entry.id !== id) as never
+      const ok = await persistVault(updatedVault, "Entry removed.")
+      if (ok) {
+        setDialogState(null)
+      }
+    },
+    [persistVault, vaultData]
+  )
+
+  const handleCopy = useCallback(async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setFeedback({ type: "success", message: "Copied to clipboard." })
+    } catch (error) {
+      console.error(error)
+      setFeedback({ type: "error", message: "Clipboard copy failed." })
+    }
+  }, [])
+
+  const renderEmptyState = (category: VaultCategory) => {
+    const config = CATEGORY_CONFIG[category]
+
+    return (
+      <div className="text-sm text-muted-foreground border border-dashed border-border rounded-lg p-8 text-center">
+        <p className="font-medium text-foreground mb-2">No {config.title.toLowerCase()} yet</p>
+        <p className="mb-4">Start by adding an entry – only encrypted data is saved to disk.</p>
+        <Button
+          variant="secondary"
+          onClick={() => setDialogState({ category, mode: "create" })}
+        >
+          Add {config.singular}
+        </Button>
+      </div>
+    )
+  }
+
+  const renderPasswordEntry = (entry: PasswordEntry) => (
+    <Card key={entry.id} className="bg-background/60 border-border/60">
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle className="text-lg font-semibold">{entry.name}</CardTitle>
+          <CardDescription>{entry.url || entry.username}</CardDescription>
+        </div>
+        <CardAction className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setDialogState({ category: "passwords", mode: "edit", item: entry })}
+          >
+            Edit
+          </Button>
+          <Button size="sm" variant="destructive" onClick={() => void handleDelete("passwords", entry.id)}>
+            Delete
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <DetailRow label="Username" value={entry.username} onCopy={handleCopy} />
+        <DetailRow label="Password" value={entry.password} mask onCopy={handleCopy} />
+        {entry.url ? <DetailRow label="URL" value={entry.url} /> : null}
+        {entry.notes ? <DetailRow label="Notes" value={entry.notes} multiline /> : null}
+      </CardContent>
+    </Card>
+  )
+
+  const renderCardEntry = (entry: CardEntry) => (
+    <Card key={entry.id} className="bg-background/60 border-border/60">
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle className="text-lg font-semibold">{entry.name}</CardTitle>
+          <CardDescription>{entry.cardholder}</CardDescription>
+        </div>
+        <CardAction className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setDialogState({ category: "cards", mode: "edit", item: entry })}
+          >
+            Edit
+          </Button>
+          <Button size="sm" variant="destructive" onClick={() => void handleDelete("cards", entry.id)}>
+            Delete
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="grid gap-3 sm:grid-cols-2">
+        <DetailRow label="Number" value={entry.number} mask onCopy={handleCopy} />
+        <DetailRow label="Expiry" value={`${entry.expiryMonth}/${entry.expiryYear}`} />
+        <DetailRow label="CVV" value={entry.cvv} mask onCopy={handleCopy} />
+        {entry.notes ? (
+          <div className="sm:col-span-2">
+            <DetailRow label="Notes" value={entry.notes} multiline />
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  )
+
+  const renderIdentityEntry = (entry: IdentityEntry) => (
+    <Card key={entry.id} className="bg-background/60 border-border/60">
+      <CardHeader className="flex flex-row items-start justify-between gap-4">
+        <div>
+          <CardTitle className="text-lg font-semibold">{entry.name}</CardTitle>
+          <CardDescription>{entry.email || entry.phone}</CardDescription>
+        </div>
+        <CardAction className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setDialogState({ category: "identities", mode: "edit", item: entry })}
+          >
+            Edit
+          </Button>
+          <Button size="sm" variant="destructive" onClick={() => void handleDelete("identities", entry.id)}>
+            Delete
+          </Button>
+        </CardAction>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {entry.email ? <DetailRow label="Email" value={entry.email} onCopy={handleCopy} /> : null}
+        {entry.phone ? <DetailRow label="Phone" value={entry.phone} onCopy={handleCopy} /> : null}
+        {entry.address ? <DetailRow label="Address" value={entry.address} multiline /> : null}
+        {entry.notes ? <DetailRow label="Notes" value={entry.notes} multiline /> : null}
+      </CardContent>
+    </Card>
+  )
+
+  return (
+    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-6 py-12">
+      <header className="flex flex-col gap-4 text-center sm:text-left">
+        <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">1Pass Vault</h1>
+        <p className="text-muted-foreground sm:max-w-xl">
+          A minimal, encrypted vault for passwords, payment cards, and identities. Your master password stays on this device and data is sealed with AES-256 encryption.
+        </p>
+      </header>
+
+      {pageError ? (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {pageError}
+        </div>
+      ) : null}
+
+      {feedback ? (
+        <div
+          className={cn(
+            "rounded-lg px-4 py-3 text-sm",
+            feedback.type === "success"
+              ? "border border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
+              : "border border-destructive/40 bg-destructive/10 text-destructive"
+          )}
+        >
+          {feedback.message}
+        </div>
+      ) : null}
+
+      {vaultExists === null ? (
+        <div className="flex flex-1 items-center justify-center text-muted-foreground">
+          Loading vault status…
+        </div>
+      ) : null}
+
+      {vaultExists === false ? (
+        <Card className="max-w-xl border-border/70 bg-background/70">
+          <CardHeader>
+            <CardTitle>Set up your vault</CardTitle>
+            <CardDescription>
+              Pick a strong master password. It is never sent anywhere, so store it safely – you will need it to unlock your data.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-6" onSubmit={handleInitialize}>
+              <div className="space-y-2">
+                <Label htmlFor="master">Master password</Label>
+                <Input
+                  id="master"
+                  type="password"
+                  autoComplete="new-password"
+                  value={setupPassword}
+                  onChange={(event) => setSetupPassword(event.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="confirm">Confirm password</Label>
+                <Input
+                  id="confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
+                  required
+                />
+              </div>
+              <Button className="w-full" size="lg" disabled={isInitializing}>
+                {isInitializing ? "Encrypting…" : "Create vault"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {vaultExists && !unlocked ? (
+        <Card className="max-w-xl border-border/70 bg-background/70">
+          <CardHeader>
+            <CardTitle>Unlock vault</CardTitle>
+            <CardDescription>Enter your master password to decrypt your entries.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="space-y-4" onSubmit={handleUnlock}>
+              <div className="space-y-2">
+                <Label htmlFor="unlock">Master password</Label>
+                <Input
+                  id="unlock"
+                  type="password"
+                  autoComplete="current-password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                  required
+                />
+              </div>
+              <Button className="w-full" size="lg" disabled={isUnlocking}>
+                {isUnlocking ? "Decrypting…" : "Unlock"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {unlocked && vaultData ? (
+        <section className="flex flex-1 flex-col gap-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-1">
+              <h2 className="text-2xl font-semibold text-foreground">Vault contents</h2>
+              <p className="text-sm text-muted-foreground">All changes persist instantly on save and stay encrypted on disk.</p>
+            </div>
+            <Button variant="outline" onClick={handleLock}>
+              Lock
+            </Button>
+          </div>
+
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as VaultCategory)} className="flex-1">
+            <TabsList>
+              <TabsTrigger value="passwords">Passwords</TabsTrigger>
+              <TabsTrigger value="cards">Cards</TabsTrigger>
+              <TabsTrigger value="identities">Identities</TabsTrigger>
+            </TabsList>
+            <TabsContent value="passwords" className="mt-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Credentials for logins and apps.</p>
+                <Button size="sm" onClick={() => setDialogState({ category: "passwords", mode: "create" })}>
+                  Add password
+                </Button>
+              </div>
+              <Separator className="bg-border/60" />
+              {vaultData.passwords.length === 0
+                ? renderEmptyState("passwords")
+                : (
+                    <div className="grid gap-4">
+                      {vaultData.passwords.map((entry) => renderPasswordEntry(entry))}
+                    </div>
+                  )}
+            </TabsContent>
+            <TabsContent value="cards" className="mt-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Payment cards stay encrypted at rest.</p>
+                <Button size="sm" onClick={() => setDialogState({ category: "cards", mode: "create" })}>
+                  Add card
+                </Button>
+              </div>
+              <Separator className="bg-border/60" />
+              {vaultData.cards.length === 0
+                ? renderEmptyState("cards")
+                : (
+                    <div className="grid gap-4">
+                      {vaultData.cards.map((entry) => renderCardEntry(entry))}
+                    </div>
+                  )}
+            </TabsContent>
+            <TabsContent value="identities" className="mt-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-muted-foreground">Profiles and address information.</p>
+                <Button size="sm" onClick={() => setDialogState({ category: "identities", mode: "create" })}>
+                  Add identity
+                </Button>
+              </div>
+              <Separator className="bg-border/60" />
+              {vaultData.identities.length === 0
+                ? renderEmptyState("identities")
+                : (
+                    <div className="grid gap-4">
+                      {vaultData.identities.map((entry) => renderIdentityEntry(entry))}
+                    </div>
+                  )}
+            </TabsContent>
+          </Tabs>
+        </section>
+      ) : null}
+
+      <Dialog open={Boolean(dialogState)} onOpenChange={(open) => !open && setDialogState(null)}>
+        <DialogContent>
+          {dialogState ? (
+            <form className="space-y-6" onSubmit={handleDialogSubmit}>
+              <DialogHeader>
+                <DialogTitle>
+                  {dialogState.mode === "edit"
+                    ? `Edit ${CATEGORY_CONFIG[dialogState.category].singular}`
+                    : `Add ${CATEGORY_CONFIG[dialogState.category].singular}`}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                {CATEGORY_CONFIG[dialogState.category].fields.map((field) => (
+                  <div key={String(field.key)} className="space-y-2">
+                    <Label htmlFor={`field-${String(field.key)}`}>{field.label}</Label>
+                    {field.multiline ? (
+                      <Textarea
+                        id={`field-${String(field.key)}`}
+                        value={formState[String(field.key)] ?? ""}
+                        onChange={(event) =>
+                          setFormState((prev) => ({ ...prev, [String(field.key)]: event.target.value }))
+                        }
+                        placeholder={field.placeholder}
+                        rows={4}
+                      />
+                    ) : (
+                      <Input
+                        id={`field-${String(field.key)}`}
+                        type={field.type ?? "text"}
+                        value={formState[String(field.key)] ?? ""}
+                        onChange={(event) =>
+                          setFormState((prev) => ({ ...prev, [String(field.key)]: event.target.value }))
+                        }
+                        placeholder={field.placeholder}
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => setDialogState(null)}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={isSaving}>
+                  {isSaving ? "Saving…" : "Save"}
+                </Button>
+              </DialogFooter>
+            </form>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </main>
+  )
+}
+
+type DetailRowProps = {
+  label: string
+  value?: string
+  mask?: boolean
+  multiline?: boolean
+  onCopy?: (value: string) => void
+}
+
+function DetailRow({ label, value, mask, multiline, onCopy }: DetailRowProps) {
+  if (!value) return null
+
+  const displayValue = mask ? "••••••••" : value
+
+  return (
+    <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-background/40 p-4 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-muted-foreground uppercase tracking-wide text-[11px]">{label}</span>
+        {onCopy ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 px-2 text-xs"
+            onClick={() => onCopy(value)}
+          >
+            Copy
+          </Button>
+        ) : null}
+      </div>
+      <div className={cn("text-foreground", multiline ? "whitespace-pre-line" : "truncate font-medium")}>{displayValue}</div>
+    </div>
+  )
+}
