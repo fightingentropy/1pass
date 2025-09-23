@@ -36,6 +36,11 @@ const generateId = () => {
   return Math.random().toString(36).slice(2)
 }
 
+const formatCardNumberInput = (rawValue: string) => {
+  const digitsOnly = rawValue.replace(/\D/g, "").slice(0, 16)
+  return digitsOnly.replace(/(\d{4})(?=\d)/g, "$1 ")
+}
+
 type VaultItem = PasswordEntry | CardEntry | IdentityEntry
 
 type DialogState = {
@@ -140,7 +145,12 @@ export default function Home() {
     const initial: Record<string, string> = {}
 
     for (const field of config.fields) {
-      const value = dialogState.item ? (dialogState.item as Record<string, string>)[field.key as string] ?? "" : ""
+      let value = dialogState.item ? (dialogState.item as Record<string, string>)[field.key as string] ?? "" : ""
+
+      if (dialogState.category === "cards" && field.key === "number") {
+        value = formatCardNumberInput(String(value))
+      }
+
       initial[field.key as string] = value
     }
 
@@ -309,7 +319,13 @@ export default function Home() {
       const base: Record<string, string> = mode === "edit" && item ? { ...item } : { id: generateId() }
 
       for (const field of config.fields) {
-        base[field.key as string] = (formState[field.key as string] ?? "").trim()
+        const rawValue = (formState[field.key as string] ?? "").trim()
+
+        if (dialogState.category === "cards" && field.key === "number") {
+          base[field.key as string] = rawValue.replace(/\D/g, "").slice(0, 16)
+        } else {
+          base[field.key as string] = rawValue
+        }
       }
 
       if (!base.name) {
@@ -361,6 +377,19 @@ export default function Home() {
       setFeedback({ type: "error", message: "Clipboard copy failed." })
     }
   }, [])
+
+  const handleFieldChange = useCallback(
+    (fieldKey: string, rawValue: string) => {
+      let value = rawValue
+
+      if (dialogState?.category === "cards" && fieldKey === "number") {
+        value = formatCardNumberInput(rawValue)
+      }
+
+      setFormState((prev) => ({ ...prev, [fieldKey]: value }))
+    },
+    [dialogState]
+  )
 
   const renderEmptyState = (category: VaultCategory) => {
     const config = CATEGORY_CONFIG[category]
@@ -671,9 +700,7 @@ export default function Home() {
                         id={`field-${String(field.key)}`}
                         type={field.type ?? "text"}
                         value={formState[String(field.key)] ?? ""}
-                        onChange={(event) =>
-                          setFormState((prev) => ({ ...prev, [String(field.key)]: event.target.value }))
-                        }
+                        onChange={(event) => handleFieldChange(String(field.key), event.target.value)}
                         placeholder={field.placeholder}
                       />
                     )}
