@@ -30,7 +30,7 @@ During local development the encrypted vault is persisted in `data/vault.json`. 
 3. Optionally customise `VAULT_BLOB_PREFIX` or `VAULT_BLOB_KEY` if you need a different location for the encrypted vault record.
 4. Redeploy the project. On the first launch, initialise the vault through the UI or by calling `POST /api/vault/init`.
 
-> **Note:** Vault blobs are uploaded with private access. Reads require a signed URL issued via the Blob API, keeping ciphertext distribution under your control. Continue to protect the blob token and rotate it if you suspect a leak.
+> **Note:** Vercel's blob SDK now requires uploads via tokens to use `public` access. The vault contents stay protected because every record is encrypted client-side, but you should still keep the blob token secret and optionally set `VAULT_BLOB_PREFIX` to a long random string to make the blob path hard to guess.
 
 ## Environment variables
 

@@ -65,7 +65,9 @@ export async function storageReadVault() {
 export async function storageWriteVault(contents: string) {
   if (isBlobEnabled()) {
     await put(BLOB_PATH, contents, {
-      access: "private",
+      // @vercel/blob@2 requires explicit "public" access when using tokens.
+      // The vault payload remains safe because it is fully encrypted before upload.
+      access: "public",
       contentType: "application/json",
       addRandomSuffix: false,
       allowOverwrite: true,
