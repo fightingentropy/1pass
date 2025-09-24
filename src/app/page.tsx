@@ -649,7 +649,7 @@ export default function Home() {
               {vaultData.passwords.length === 0
                 ? renderEmptyState("passwords")
                 : (
-                    <div className="grid gap-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       {vaultData.passwords.map((entry) => renderPasswordEntry(entry))}
                     </div>
                   )}
@@ -665,7 +665,7 @@ export default function Home() {
               {vaultData.cards.length === 0
                 ? renderEmptyState("cards")
                 : (
-                    <div className="grid gap-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       {vaultData.cards.map((entry) => renderCardEntry(entry))}
                     </div>
                   )}
@@ -681,7 +681,7 @@ export default function Home() {
               {vaultData.identities.length === 0
                 ? renderEmptyState("identities")
                 : (
-                    <div className="grid gap-4">
+                    <div className="grid gap-4 sm:grid-cols-2">
                       {vaultData.identities.map((entry) => renderIdentityEntry(entry))}
                     </div>
                   )}
