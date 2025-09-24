@@ -536,12 +536,13 @@ export default function Home() {
   )
 
   return (
-    <main
-      className={cn(
-        "mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-6 py-12",
-        shouldCenter && "items-center justify-center"
-      )}
-    >
+    <>
+      <main
+        className={cn(
+          "mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-6 py-12",
+          shouldCenter && "items-center justify-center"
+        )}
+      >
       <header
         className={cn(
           "flex w-full flex-col gap-4",
@@ -562,20 +563,6 @@ export default function Home() {
           )}
         >
           {pageError}
-        </div>
-      ) : null}
-
-      {feedback ? (
-        <div
-          className={cn(
-            "w-full rounded-lg px-4 py-3 text-sm",
-            feedback.type === "success"
-              ? "border border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
-              : "border border-destructive/40 bg-destructive/10 text-destructive",
-            shouldCenter && "max-w-xl"
-          )}
-        >
-          {feedback.message}
         </div>
       ) : null}
 
@@ -771,7 +758,25 @@ export default function Home() {
           ) : null}
         </DialogContent>
       </Dialog>
-    </main>
+      </main>
+
+      {feedback ? (
+        <div className="pointer-events-none fixed inset-x-4 top-4 z-50 flex justify-end sm:inset-x-auto sm:right-6">
+          <div
+            className={cn(
+              "pointer-events-auto w-full max-w-sm rounded-lg px-4 py-3 text-sm shadow-lg",
+              feedback.type === "success"
+                ? "border border-emerald-400/40 bg-emerald-500/15 text-emerald-100"
+                : "border border-destructive/40 bg-destructive/10 text-destructive"
+            )}
+            role="status"
+            aria-live="polite"
+          >
+            {feedback.message}
+          </div>
+        </div>
+      ) : null}
+    </>
   )
 }
 
