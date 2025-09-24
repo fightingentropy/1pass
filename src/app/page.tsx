@@ -540,7 +540,7 @@ export default function Home() {
       <main
         className={cn(
           "mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-6 py-12",
-          shouldCenter && "items-center justify-center"
+          shouldCenter && "items-center justify-center md:justify-start md:pt-24"
         )}
       >
       <header
