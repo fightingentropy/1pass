@@ -12,6 +12,8 @@ const BLOB_TOKEN = process.env.BLOB_READ_WRITE_TOKEN
 const BLOB_PREFIX = normalizePrefix(process.env.VAULT_BLOB_PREFIX)
 const BLOB_KEY = process.env.VAULT_BLOB_KEY ?? "vault.json"
 const BLOB_PATH = [BLOB_PREFIX, BLOB_KEY].filter(Boolean).join("/")
+const IS_VERCEL_DEPLOYMENT = process.env.VERCEL === "1"
+const IS_DEPLOYED_ENVIRONMENT = IS_VERCEL_DEPLOYMENT && process.env.VERCEL_ENV !== "development"
 const LOCAL_VAULT_DIR = path.join(process.cwd(), "data")
 const LOCAL_VAULT_PATH = path.join(LOCAL_VAULT_DIR, "vault.json")
 
@@ -24,7 +26,7 @@ function normalizePrefix(prefix: string | undefined) {
 }
 
 function isBlobEnabled() {
-  return Boolean(BLOB_TOKEN)
+  return Boolean(BLOB_TOKEN && IS_DEPLOYED_ENVIRONMENT)
 }
 
 async function readFromBlob(handle: HeadBlobResult) {
