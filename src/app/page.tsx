@@ -144,6 +144,11 @@ export default function Home() {
 
   const unlocked = useMemo(() => vaultData !== null && sessionPassword !== null, [vaultData, sessionPassword])
 
+  const showLoading = vaultExists === null
+  const showSetup = vaultExists === false
+  const showUnlock = vaultExists === true && !unlocked
+  const shouldCenter = showLoading || showSetup || showUnlock
+
   useEffect(() => {
     if (!dialogState) {
       setFormState({})
@@ -531,8 +536,18 @@ export default function Home() {
   )
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-6 py-12">
-      <header className="flex flex-col gap-4 text-center sm:text-left">
+    <main
+      className={cn(
+        "mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-6 py-12",
+        shouldCenter && "items-center justify-center"
+      )}
+    >
+      <header
+        className={cn(
+          "flex w-full flex-col gap-4",
+          shouldCenter ? "max-w-xl items-center text-center" : "text-center sm:text-left"
+        )}
+      >
         <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">1Pass Vault</h1>
         <p className="text-muted-foreground sm:max-w-xl">
           A minimal, encrypted vault for passwords, payment cards, and identities. Your master password stays on this device and data is sealed with AES-256 encryption.
@@ -540,7 +555,12 @@ export default function Home() {
       </header>
 
       {pageError ? (
-        <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+        <div
+          className={cn(
+            "w-full rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive",
+            shouldCenter && "max-w-xl"
+          )}
+        >
           {pageError}
         </div>
       ) : null}
@@ -548,24 +568,25 @@ export default function Home() {
       {feedback ? (
         <div
           className={cn(
-            "rounded-lg px-4 py-3 text-sm",
+            "w-full rounded-lg px-4 py-3 text-sm",
             feedback.type === "success"
               ? "border border-emerald-400/40 bg-emerald-500/15 text-emerald-200"
-              : "border border-destructive/40 bg-destructive/10 text-destructive"
+              : "border border-destructive/40 bg-destructive/10 text-destructive",
+            shouldCenter && "max-w-xl"
           )}
         >
           {feedback.message}
         </div>
       ) : null}
 
-      {vaultExists === null ? (
+      {showLoading ? (
         <div className="flex flex-1 items-center justify-center text-muted-foreground">
           Loading vault status…
         </div>
       ) : null}
 
-      {vaultExists === false ? (
-        <Card className="max-w-xl border-border/70 bg-background/70">
+      {showSetup ? (
+        <Card className="w-full max-w-xl border-border/70 bg-background/70">
           <CardHeader>
             <CardTitle>Set up your vault</CardTitle>
             <CardDescription>
@@ -604,8 +625,8 @@ export default function Home() {
         </Card>
       ) : null}
 
-      {vaultExists && !unlocked ? (
-        <Card className="max-w-xl border-border/70 bg-background/70">
+      {showUnlock ? (
+        <Card className="w-full max-w-xl border-border/70 bg-background/70">
           <CardHeader>
             <CardTitle>Unlock vault</CardTitle>
             <CardDescription>Enter your master password to decrypt your entries.</CardDescription>
