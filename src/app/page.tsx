@@ -108,6 +108,13 @@ const CATEGORY_CONFIG: {
       { key: "phone", label: "Phone" },
       { key: "nino", label: "National Insurance Number", placeholder: "QQ 12 34 56 C" },
       { key: "utr", label: "UTR", placeholder: "12345 67890" },
+      { key: "nhsNumber", label: "NHS Number", placeholder: "123 456 7890" },
+      {
+        key: "passportDetails",
+        label: "Passport Details",
+        multiline: true,
+        placeholder: "Number, expiry date, issuing country",
+      },
       { key: "address", label: "Address", multiline: true },
       { key: "notes", label: "Notes", multiline: true },
     ],
@@ -513,6 +520,10 @@ export default function Home() {
           <DetailRow label="National Insurance Number" value={entry.nino} onCopy={handleCopy} />
         ) : null}
         {entry.utr ? <DetailRow label="UTR" value={entry.utr} onCopy={handleCopy} /> : null}
+        {entry.nhsNumber ? <DetailRow label="NHS Number" value={entry.nhsNumber} onCopy={handleCopy} /> : null}
+        {entry.passportDetails ? (
+          <DetailRow label="Passport Details" value={entry.passportDetails} multiline />
+        ) : null}
         {entry.address ? <DetailRow label="Address" value={entry.address} multiline /> : null}
         {entry.notes ? <DetailRow label="Notes" value={entry.notes} multiline /> : null}
       </CardContent>

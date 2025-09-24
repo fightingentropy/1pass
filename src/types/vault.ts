@@ -25,6 +25,8 @@ export type IdentityEntry = {
   phone?: string
   nino?: string
   utr?: string
+  nhsNumber?: string
+  passportDetails?: string
   address?: string
   notes?: string
 }
