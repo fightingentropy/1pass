@@ -23,6 +23,8 @@ export type IdentityEntry = {
   name: string
   email?: string
   phone?: string
+  nino?: string
+  utr?: string
   address?: string
   notes?: string
 }

@@ -106,6 +106,8 @@ const CATEGORY_CONFIG: {
       { key: "name", label: "Name" },
       { key: "email", label: "Email", placeholder: "you@example.com" },
       { key: "phone", label: "Phone" },
+      { key: "nino", label: "National Insurance Number", placeholder: "QQ 12 34 56 C" },
+      { key: "utr", label: "UTR", placeholder: "12345 67890" },
       { key: "address", label: "Address", multiline: true },
       { key: "notes", label: "Notes", multiline: true },
     ],
@@ -493,6 +495,10 @@ export default function Home() {
       <CardContent className="space-y-3">
         {entry.email ? <DetailRow label="Email" value={entry.email} onCopy={handleCopy} /> : null}
         {entry.phone ? <DetailRow label="Phone" value={entry.phone} onCopy={handleCopy} /> : null}
+        {entry.nino ? (
+          <DetailRow label="National Insurance Number" value={entry.nino} onCopy={handleCopy} />
+        ) : null}
+        {entry.utr ? <DetailRow label="UTR" value={entry.utr} onCopy={handleCopy} /> : null}
         {entry.address ? <DetailRow label="Address" value={entry.address} multiline /> : null}
         {entry.notes ? <DetailRow label="Notes" value={entry.notes} multiline /> : null}
       </CardContent>
