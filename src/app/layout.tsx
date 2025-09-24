@@ -4,6 +4,12 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "1Pass Vault",
   description: "Securely manage passwords, cards, and identities",
+  icons: {
+    icon: [
+      { url: "/icon.svg", type: "image/svg+xml", sizes: "any" },
+    ],
+    shortcut: ["/icon.svg"],
+  },
 };
 
 export default function RootLayout({
