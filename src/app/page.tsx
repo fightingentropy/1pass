@@ -159,6 +159,20 @@ export default function Home() {
     setFormState(initial)
   }, [dialogState])
 
+  useEffect(() => {
+    if (!feedback) {
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setFeedback(null)
+    }, 4000)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [feedback])
+
   const checkVaultStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/vault/status")
