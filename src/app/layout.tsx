@@ -6,10 +6,6 @@ export const metadata: Metadata = {
   description: "Securely manage passwords, cards, and identities",
   applicationName: "1Pass Vault",
   manifest: "/manifest.webmanifest",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#F9FAFB" },
-    { media: "(prefers-color-scheme: dark)", color: "#0B1120" },
-  ],
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
@@ -35,6 +31,10 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#F9FAFB" },
+    { media: "(prefers-color-scheme: dark)", color: "#0B1120" },
+  ],
 }
 
 export default function RootLayout({
