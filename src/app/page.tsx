@@ -550,9 +550,6 @@ export default function Home() {
         )}
       >
         <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">1Pass Vault</h1>
-        <p className="text-muted-foreground sm:max-w-xl">
-          A minimal, encrypted vault for passwords, payment cards, and identities. Your master password stays on this device and data is sealed with AES-256 encryption.
-        </p>
       </header>
 
       {pageError ? (
