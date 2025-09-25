@@ -54,11 +54,6 @@ type FeedbackState = {
   message: string
 }
 
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>
-  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>
-}
-
 type CategoryConfig<T extends VaultItem> = {
   title: string
   singular: string
@@ -141,9 +136,6 @@ export default function Home() {
 
   const [feedback, setFeedback] = useState<FeedbackState | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
-  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null)
-  const [isInstallPrompting, setIsInstallPrompting] = useState(false)
-
   const [dialogState, setDialogState] = useState<DialogState | null>(null)
   const [formState, setFormState] = useState<Record<string, string>>({})
 
@@ -225,30 +217,6 @@ export default function Home() {
 
     void register()
   }, [])
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return
-    }
-
-    const handleBeforeInstallPrompt = (event: Event) => {
-      event.preventDefault()
-      setInstallPromptEvent(event as BeforeInstallPromptEvent)
-    }
-
-    const handleAppInstalled = () => {
-      setInstallPromptEvent(null)
-      setFeedback({ type: 'success', message: 'App installed. Find it on your home screen.' })
-    }
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt as EventListener)
-    window.addEventListener('appinstalled', handleAppInstalled)
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt as EventListener)
-      window.removeEventListener('appinstalled', handleAppInstalled)
-    }
-  }, [setFeedback, setInstallPromptEvent])
 
   const handleInitialize = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -342,27 +310,6 @@ export default function Home() {
     setSessionPassword(null)
     setFeedback({ type: "success", message: "Vault locked." })
   }, [])
-
-  const handleInstallApp = useCallback(async () => {
-    if (!installPromptEvent) {
-      return
-    }
-
-    try {
-      setIsInstallPrompting(true)
-      await installPromptEvent.prompt()
-      const outcome = await installPromptEvent.userChoice
-      if (outcome.outcome === 'accepted') {
-        setFeedback({ type: 'success', message: 'App install started. Check your home screen.' })
-      }
-    } catch (error) {
-      console.error(error)
-      setFeedback({ type: 'error', message: 'Unable to open install prompt.' })
-    } finally {
-      setInstallPromptEvent(null)
-      setIsInstallPrompting(false)
-    }
-  }, [installPromptEvent, setFeedback, setInstallPromptEvent, setIsInstallPrompting])
 
   const persistVault = useCallback(
     async (data: VaultData, successMessage: string) => {
@@ -621,21 +568,7 @@ export default function Home() {
         >
           <div className="space-y-2 sm:max-w-xl">
             <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">1Pass Vault</h1>
-            <p className="text-sm text-muted-foreground sm:text-base">
-              Keep passwords, payment cards, and identity documents encrypted locally with a polished mobile-first experience.
-            </p>
           </div>
-          {installPromptEvent ? (
-            <Button
-              size="sm"
-              variant="secondary"
-              className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full border border-border/60 bg-background/70 px-4 py-2 text-sm font-medium shadow-sm sm:w-auto"
-              onClick={() => void handleInstallApp()}
-              disabled={isInstallPrompting}
-            >
-              {isInstallPrompting ? "Preparing…" : "Install app"}
-            </Button>
-          ) : null}
         </header>
 
         {pageError ? (
