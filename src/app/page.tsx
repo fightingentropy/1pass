@@ -54,6 +54,11 @@ type FeedbackState = {
   message: string
 }
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>
+}
+
 type CategoryConfig<T extends VaultItem> = {
   title: string
   singular: string
@@ -136,6 +141,8 @@ export default function Home() {
 
   const [feedback, setFeedback] = useState<FeedbackState | null>(null)
   const [pageError, setPageError] = useState<string | null>(null)
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null)
+  const [isInstallPrompting, setIsInstallPrompting] = useState(false)
 
   const [dialogState, setDialogState] = useState<DialogState | null>(null)
   const [formState, setFormState] = useState<Record<string, string>>({})
@@ -202,6 +209,46 @@ export default function Home() {
   useEffect(() => {
     void checkVaultStatus()
   }, [checkVaultStatus])
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !('serviceWorker' in navigator) || process.env.NODE_ENV !== 'production') {
+      return
+    }
+
+    const register = async () => {
+      try {
+        await navigator.serviceWorker.register('/sw.js')
+      } catch (error) {
+        console.error('Service worker registration failed', error)
+      }
+    }
+
+    void register()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault()
+      setInstallPromptEvent(event as BeforeInstallPromptEvent)
+    }
+
+    const handleAppInstalled = () => {
+      setInstallPromptEvent(null)
+      setFeedback({ type: 'success', message: 'App installed. Find it on your home screen.' })
+    }
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt as EventListener)
+    window.addEventListener('appinstalled', handleAppInstalled)
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt as EventListener)
+      window.removeEventListener('appinstalled', handleAppInstalled)
+    }
+  }, [setFeedback, setInstallPromptEvent])
 
   const handleInitialize = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -295,6 +342,27 @@ export default function Home() {
     setSessionPassword(null)
     setFeedback({ type: "success", message: "Vault locked." })
   }, [])
+
+  const handleInstallApp = useCallback(async () => {
+    if (!installPromptEvent) {
+      return
+    }
+
+    try {
+      setIsInstallPrompting(true)
+      await installPromptEvent.prompt()
+      const outcome = await installPromptEvent.userChoice
+      if (outcome.outcome === 'accepted') {
+        setFeedback({ type: 'success', message: 'App install started. Check your home screen.' })
+      }
+    } catch (error) {
+      console.error(error)
+      setFeedback({ type: 'error', message: 'Unable to open install prompt.' })
+    } finally {
+      setInstallPromptEvent(null)
+      setIsInstallPrompting(false)
+    }
+  }, [installPromptEvent, setFeedback, setInstallPromptEvent, setIsInstallPrompting])
 
   const persistVault = useCallback(
     async (data: VaultData, successMessage: string) => {
@@ -423,13 +491,10 @@ export default function Home() {
     const config = CATEGORY_CONFIG[category]
 
     return (
-      <div className="text-sm text-muted-foreground border border-dashed border-border rounded-lg p-8 text-center">
-        <p className="font-medium text-foreground mb-2">No {config.title.toLowerCase()} yet</p>
-        <p className="mb-4">Start by adding an entry – only encrypted data is saved to disk.</p>
-        <Button
-          variant="secondary"
-          onClick={() => setDialogState({ category, mode: "create" })}
-        >
+      <div className="text-sm text-muted-foreground rounded-2xl border border-dashed border-border/70 bg-background/80 p-8 text-center shadow-inner">
+        <p className="mb-2 text-base font-medium text-foreground">No {config.title.toLowerCase()} yet</p>
+        <p className="mb-4 text-sm text-muted-foreground">Start by adding an entry – only encrypted data is saved to disk.</p>
+        <Button variant="secondary" className="rounded-full px-4" onClick={() => setDialogState({ category, mode: "create" })}>
           Add {config.singular}
         </Button>
       </div>
@@ -437,13 +502,13 @@ export default function Home() {
   }
 
   const renderPasswordEntry = (entry: PasswordEntry) => (
-    <Card key={entry.id} className="bg-background/60 border-border/60">
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
+    <Card key={entry.id} className="rounded-2xl border border-border/70 bg-background/70 shadow-sm backdrop-blur">
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
           <CardTitle className="text-lg font-semibold">{entry.name}</CardTitle>
           <CardDescription>{entry.url || entry.username}</CardDescription>
         </div>
-        <CardAction className="flex items-center gap-2">
+        <CardAction className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant="outline"
@@ -456,7 +521,7 @@ export default function Home() {
           </Button>
         </CardAction>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
         <DetailRow label="Username" value={entry.username} onCopy={handleCopy} />
         <DetailRow label="Password" value={entry.password} mask onCopy={handleCopy} />
         {entry.url ? <DetailRow label="URL" value={entry.url} /> : null}
@@ -465,47 +530,51 @@ export default function Home() {
     </Card>
   )
 
-  const renderCardEntry = (entry: CardEntry) => (
-    <Card key={entry.id} className="bg-background/60 border-border/60">
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
-        <div>
-          <CardTitle className="text-lg font-semibold">{entry.name}</CardTitle>
-          <CardDescription>{entry.cardholder}</CardDescription>
-        </div>
-        <CardAction className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setDialogState({ category: "cards", mode: "edit", item: entry })}
-          >
-            Edit
-          </Button>
-          <Button size="sm" variant="destructive" onClick={() => void handleDelete("cards", entry.id)}>
-            Delete
-          </Button>
-        </CardAction>
-      </CardHeader>
-      <CardContent className="grid gap-3 sm:grid-cols-2">
-        <DetailRow label="Number" value={entry.number} mask onCopy={handleCopy} />
-        <DetailRow label="Expiry" value={`${entry.expiryMonth}/${entry.expiryYear}`} />
-        <DetailRow label="CVV" value={entry.cvv} mask onCopy={handleCopy} />
-        {entry.notes ? (
-          <div className="sm:col-span-2">
-            <DetailRow label="Notes" value={entry.notes} multiline />
+  const renderCardEntry = (entry: CardEntry) => {
+    const expiry = [entry.expiryMonth, entry.expiryYear].filter(Boolean).join('/')
+
+    return (
+      <Card key={entry.id} className="rounded-2xl border border-border/70 bg-background/70 shadow-sm backdrop-blur">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
+          <div>
+            <CardTitle className="text-lg font-semibold">{entry.name}</CardTitle>
+            <CardDescription>{entry.cardholder}</CardDescription>
           </div>
-        ) : null}
-      </CardContent>
-    </Card>
-  )
+          <CardAction className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setDialogState({ category: "cards", mode: "edit", item: entry })}
+            >
+              Edit
+            </Button>
+            <Button size="sm" variant="destructive" onClick={() => void handleDelete("cards", entry.id)}>
+              Delete
+            </Button>
+          </CardAction>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2">
+          <DetailRow label="Number" value={entry.number} mask onCopy={handleCopy} />
+          {expiry ? <DetailRow label="Expiry" value={expiry} /> : null}
+          <DetailRow label="CVV" value={entry.cvv} mask onCopy={handleCopy} />
+          {entry.notes ? (
+            <div className="sm:col-span-2">
+              <DetailRow label="Notes" value={entry.notes} multiline />
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+    )
+  }
 
   const renderIdentityEntry = (entry: IdentityEntry) => (
-    <Card key={entry.id} className="bg-background/60 border-border/60">
-      <CardHeader className="flex flex-row items-start justify-between gap-4">
+    <Card key={entry.id} className="rounded-2xl border border-border/70 bg-background/70 shadow-sm backdrop-blur">
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
           <CardTitle className="text-lg font-semibold">{entry.name}</CardTitle>
           <CardDescription>{entry.email || entry.phone}</CardDescription>
         </div>
-        <CardAction className="flex items-center gap-2">
+        <CardAction className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
             variant="outline"
@@ -518,7 +587,7 @@ export default function Home() {
           </Button>
         </CardAction>
       </CardHeader>
-      <CardContent className="space-y-3">
+      <CardContent className="space-y-4">
         {entry.email ? <DetailRow label="Email" value={entry.email} onCopy={handleCopy} /> : null}
         {entry.phone ? <DetailRow label="Phone" value={entry.phone} onCopy={handleCopy} /> : null}
         {entry.nino ? (
@@ -539,173 +608,191 @@ export default function Home() {
     <>
       <main
         className={cn(
-          "mx-auto flex min-h-screen w-full max-w-5xl flex-col gap-8 px-6 py-12",
-          shouldCenter && "items-center justify-center md:justify-start md:pt-24"
+          "flex w-full flex-1 flex-col gap-8 sm:gap-10",
+          shouldCenter ? "items-center justify-center" : "pb-4"
         )}
       >
-      <header
-        className={cn(
-          "flex w-full flex-col gap-4",
-          shouldCenter ? "max-w-xl items-center text-center" : "text-center sm:text-left"
-        )}
-      >
-        <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">1Pass Vault</h1>
-      </header>
-
-      {pageError ? (
-        <div
+        <header
           className={cn(
-            "w-full rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive",
-            shouldCenter && "max-w-xl"
+            "flex w-full flex-col gap-4",
+            !shouldCenter && "sm:flex-row sm:items-start sm:justify-between",
+            shouldCenter ? "mx-auto max-w-sm items-center text-center sm:max-w-md" : "items-start text-left"
           )}
         >
-          {pageError}
-        </div>
-      ) : null}
-
-      {showLoading ? (
-        <div className="flex flex-1 items-center justify-center text-muted-foreground">
-          Loading vault status…
-        </div>
-      ) : null}
-
-      {showSetup ? (
-        <Card className="w-full max-w-xl border-border/70 bg-background/70">
-          <CardHeader>
-            <CardTitle>Set up your vault</CardTitle>
-            <CardDescription>
-              Pick a strong master password. It is never sent anywhere, so store it safely – you will need it to unlock your data.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="space-y-6" onSubmit={handleInitialize}>
-              <div className="space-y-2">
-                <Label htmlFor="master">Master password</Label>
-                <Input
-                  id="master"
-                  type="password"
-                  autoComplete="new-password"
-                  value={setupPassword}
-                  onChange={(event) => setSetupPassword(event.target.value)}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="confirm">Confirm password</Label>
-                <Input
-                  id="confirm"
-                  type="password"
-                  autoComplete="new-password"
-                  value={confirmPassword}
-                  onChange={(event) => setConfirmPassword(event.target.value)}
-                  required
-                />
-              </div>
-              <Button className="w-full" size="lg" disabled={isInitializing}>
-                {isInitializing ? "Encrypting…" : "Create vault"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {showUnlock ? (
-        <Card className="w-full max-w-xl border-border/70 bg-background/70">
-          <CardHeader>
-            <CardTitle>Unlock vault</CardTitle>
-            <CardDescription>Enter your master password to decrypt your entries.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <form className="space-y-4" onSubmit={handleUnlock}>
-              <div className="space-y-2">
-                <Label htmlFor="unlock">Master password</Label>
-                <Input
-                  id="unlock"
-                  type="password"
-                  autoComplete="current-password"
-                  value={loginPassword}
-                  onChange={(event) => setLoginPassword(event.target.value)}
-                  required
-                />
-              </div>
-              <Button className="w-full" size="lg" disabled={isUnlocking}>
-                {isUnlocking ? "Decrypting…" : "Unlock"}
-              </Button>
-            </form>
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {unlocked && vaultData ? (
-        <section className="flex flex-1 flex-col gap-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-1">
-              <h2 className="text-2xl font-semibold text-foreground">Vault contents</h2>
-            </div>
-            <Button variant="outline" onClick={handleLock}>
-              Lock
-            </Button>
+          <div className="space-y-2 sm:max-w-xl">
+            <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">1Pass Vault</h1>
+            <p className="text-sm text-muted-foreground sm:text-base">
+              Keep passwords, payment cards, and identity documents encrypted locally with a polished mobile-first experience.
+            </p>
           </div>
+          {installPromptEvent ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="inline-flex w-full shrink-0 items-center justify-center gap-2 rounded-full border border-border/60 bg-background/70 px-4 py-2 text-sm font-medium shadow-sm sm:w-auto"
+              onClick={() => void handleInstallApp()}
+              disabled={isInstallPrompting}
+            >
+              {isInstallPrompting ? "Preparing…" : "Install app"}
+            </Button>
+          ) : null}
+        </header>
 
-          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as VaultCategory)} className="flex-1">
-            <TabsList>
-              <TabsTrigger value="passwords">Passwords</TabsTrigger>
-              <TabsTrigger value="cards">Cards</TabsTrigger>
-              <TabsTrigger value="identities">Identities</TabsTrigger>
-            </TabsList>
-            <TabsContent value="passwords" className="mt-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Credentials for logins and apps.</p>
-                <Button size="sm" onClick={() => setDialogState({ category: "passwords", mode: "create" })}>
-                  Add password
-                </Button>
-              </div>
-              <Separator className="bg-border/60" />
-              {vaultData.passwords.length === 0
-                ? renderEmptyState("passwords")
-                : (
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      {vaultData.passwords.map((entry) => renderPasswordEntry(entry))}
-                    </div>
-                  )}
-            </TabsContent>
-            <TabsContent value="cards" className="mt-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Payment cards stay encrypted at rest.</p>
-                <Button size="sm" onClick={() => setDialogState({ category: "cards", mode: "create" })}>
-                  Add card
-                </Button>
-              </div>
-              <Separator className="bg-border/60" />
-              {vaultData.cards.length === 0
-                ? renderEmptyState("cards")
-                : (
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      {vaultData.cards.map((entry) => renderCardEntry(entry))}
-                    </div>
-                  )}
-            </TabsContent>
-            <TabsContent value="identities" className="mt-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Profiles and address information.</p>
-                <Button size="sm" onClick={() => setDialogState({ category: "identities", mode: "create" })}>
-                  Add identity
-                </Button>
-              </div>
-              <Separator className="bg-border/60" />
-              {vaultData.identities.length === 0
-                ? renderEmptyState("identities")
-                : (
-                    <div className="grid gap-4 sm:grid-cols-2">
-                      {vaultData.identities.map((entry) => renderIdentityEntry(entry))}
-                    </div>
-                  )}
-            </TabsContent>
-          </Tabs>
-        </section>
-      ) : null}
+        {pageError ? (
+          <div
+            className={cn(
+              "w-full rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive",
+              shouldCenter && "max-w-xl"
+            )}
+          >
+            {pageError}
+          </div>
+        ) : null}
 
-      <Dialog open={Boolean(dialogState)} onOpenChange={(open) => !open && setDialogState(null)}>
+        {showLoading ? (
+          <div className="flex flex-1 items-center justify-center text-muted-foreground">
+            Loading vault status…
+          </div>
+        ) : null}
+
+        {showSetup ? (
+          <Card className="w-full max-w-xl rounded-2xl border border-border/70 bg-background/80 shadow-lg backdrop-blur">
+            <CardHeader className="space-y-1">
+              <CardTitle>Set up your vault</CardTitle>
+              <CardDescription>
+                Pick a strong master password. It is never sent anywhere, so store it safely – you will need it to unlock your data.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-6" onSubmit={handleInitialize}>
+                <div className="space-y-2">
+                  <Label htmlFor="master">Master password</Label>
+                  <Input
+                    id="master"
+                    type="password"
+                    autoComplete="new-password"
+                    value={setupPassword}
+                    onChange={(event) => setSetupPassword(event.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirm">Confirm password</Label>
+                  <Input
+                    id="confirm"
+                    type="password"
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(event) => setConfirmPassword(event.target.value)}
+                    required
+                  />
+                </div>
+                <Button className="w-full" size="lg" disabled={isInitializing}>
+                  {isInitializing ? "Encrypting…" : "Create vault"}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {showUnlock ? (
+          <Card className="w-full max-w-xl rounded-2xl border border-border/70 bg-background/80 shadow-lg backdrop-blur">
+            <CardHeader className="space-y-1">
+              <CardTitle>Unlock vault</CardTitle>
+              <CardDescription>Enter your master password to decrypt your entries.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form className="space-y-4" onSubmit={handleUnlock}>
+                <div className="space-y-2">
+                  <Label htmlFor="unlock">Master password</Label>
+                  <Input
+                    id="unlock"
+                    type="password"
+                    autoComplete="current-password"
+                    value={loginPassword}
+                    onChange={(event) => setLoginPassword(event.target.value)}
+                    required
+                  />
+                </div>
+                <Button className="w-full" size="lg" disabled={isUnlocking}>
+                  {isUnlocking ? "Decrypting…" : "Unlock"}
+                </Button>
+              </form>
+            </CardContent>
+          </Card>
+        ) : null}
+
+        {unlocked && vaultData ? (
+          <section className="flex flex-1 flex-col gap-8">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-1">
+                <h2 className="text-2xl font-semibold text-foreground">Vault contents</h2>
+                <p className="text-sm text-muted-foreground">Your encrypted data stays on this device unless you export it.</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={handleLock} className="rounded-full border-border/60 bg-background/70 px-4">
+                Lock
+              </Button>
+            </div>
+
+            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as VaultCategory)} className="flex-1">
+              <TabsList className="w-full overflow-x-auto rounded-full border border-border/60 bg-muted/50 p-1 text-sm shadow-sm sm:w-auto gap-1">
+                <TabsTrigger value="passwords" className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm">Passwords</TabsTrigger>
+                <TabsTrigger value="cards" className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm">Cards</TabsTrigger>
+                <TabsTrigger value="identities" className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm">Identities</TabsTrigger>
+              </TabsList>
+              <TabsContent value="passwords" className="mt-6 space-y-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-muted-foreground">Credentials for logins and apps.</p>
+                  <Button size="sm" className="rounded-full px-4" onClick={() => setDialogState({ category: "passwords", mode: "create" })}>
+                    Add password
+                  </Button>
+                </div>
+                <Separator className="bg-border/60" />
+                {vaultData.passwords.length === 0
+                  ? renderEmptyState("passwords")
+                  : (
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        {vaultData.passwords.map((entry) => renderPasswordEntry(entry))}
+                      </div>
+                    )}
+              </TabsContent>
+              <TabsContent value="cards" className="mt-6 space-y-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-muted-foreground">Payment cards stay encrypted at rest.</p>
+                  <Button size="sm" className="rounded-full px-4" onClick={() => setDialogState({ category: "cards", mode: "create" })}>
+                    Add card
+                  </Button>
+                </div>
+                <Separator className="bg-border/60" />
+                {vaultData.cards.length === 0
+                  ? renderEmptyState("cards")
+                  : (
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        {vaultData.cards.map((entry) => renderCardEntry(entry))}
+                      </div>
+                    )}
+              </TabsContent>
+              <TabsContent value="identities" className="mt-6 space-y-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-sm text-muted-foreground">Profiles and address information.</p>
+                  <Button size="sm" className="rounded-full px-4" onClick={() => setDialogState({ category: "identities", mode: "create" })}>
+                    Add identity
+                  </Button>
+                </div>
+                <Separator className="bg-border/60" />
+                {vaultData.identities.length === 0
+                  ? renderEmptyState("identities")
+                  : (
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        {vaultData.identities.map((entry) => renderIdentityEntry(entry))}
+                      </div>
+                    )}
+              </TabsContent>
+            </Tabs>
+          </section>
+        ) : null}
+
+        <Dialog open={Boolean(dialogState)} onOpenChange={(open) => !open && setDialogState(null)}>
         <DialogContent>
           {dialogState ? (
             <form className="space-y-6" onSubmit={handleDialogSubmit}>
@@ -753,7 +840,7 @@ export default function Home() {
             </form>
           ) : null}
         </DialogContent>
-      </Dialog>
+        </Dialog>
       </main>
 
       {feedback ? (
@@ -790,7 +877,7 @@ function DetailRow({ label, value, mask, multiline, onCopy }: DetailRowProps) {
   const displayValue = mask ? "••••••••" : value
 
   return (
-    <div className="flex flex-col gap-1 rounded-lg border border-border/50 bg-background/40 p-4 text-sm">
+    <div className="flex flex-col gap-1 rounded-xl border border-border/60 bg-background/80 p-4 text-sm shadow-inner">
       <div className="flex items-center justify-between gap-2">
         <span className="text-muted-foreground uppercase tracking-wide text-[11px]">{label}</span>
         {onCopy ? (
@@ -798,7 +885,7 @@ function DetailRow({ label, value, mask, multiline, onCopy }: DetailRowProps) {
             type="button"
             size="sm"
             variant="ghost"
-            className="h-7 px-2 text-xs"
+            className="h-7 rounded-full px-3 text-xs"
             onClick={() => onCopy(value)}
           >
             Copy
