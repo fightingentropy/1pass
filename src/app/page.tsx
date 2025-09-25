@@ -641,7 +641,6 @@ export default function Home() {
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-1">
               <h2 className="text-2xl font-semibold text-foreground">Vault contents</h2>
-              <p className="text-sm text-muted-foreground">All changes persist instantly on save and stay encrypted on disk.</p>
             </div>
             <Button variant="outline" onClick={handleLock}>
               Lock
