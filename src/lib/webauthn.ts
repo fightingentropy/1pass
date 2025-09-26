@@ -1,5 +1,35 @@
+import type { AuthenticatorTransportFuture } from "@simplewebauthn/types"
+
 const RP_NAME = "1Pass Vault"
 const USER_HANDLE = "1pass-user"
+
+function isAuthenticatorTransportFuture(
+  transport: string,
+): transport is AuthenticatorTransportFuture {
+  switch (transport) {
+    case "ble":
+    case "cable":
+    case "hybrid":
+    case "internal":
+    case "nfc":
+    case "smart-card":
+    case "usb":
+      return true
+    default:
+      return false
+  }
+}
+
+export function normalizeAuthenticatorTransports(
+  transports?: readonly string[],
+): AuthenticatorTransportFuture[] | undefined {
+  if (!transports || transports.length === 0) {
+    return undefined
+  }
+
+  const valid = transports.filter(isAuthenticatorTransportFuture)
+  return valid.length > 0 ? valid : undefined
+}
 
 let registrationChallenge: string | null = null
 let authenticationChallenge: string | null = null
