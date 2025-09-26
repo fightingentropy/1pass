@@ -5,7 +5,12 @@ import { verifyAuthenticationResponse } from "@simplewebauthn/server"
 import type { AuthenticationResponseJSON } from "@simplewebauthn/types"
 
 import { getStoredPasskey, updateStoredPasskeyCounter } from "@/lib/passkeys"
-import { consumeAuthenticationChallenge, getExpectedOrigin, getRpID } from "@/lib/webauthn"
+import {
+  consumeAuthenticationChallenge,
+  getExpectedOrigin,
+  getRpID,
+  normalizeAuthenticatorTransports,
+} from "@/lib/webauthn"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -39,11 +44,11 @@ export async function POST(request: Request) {
       expectedOrigin: getExpectedOrigin(request),
       expectedRPID: getRpID(request),
       requireUserVerification: true,
-      authenticator: {
-        credentialID: isoBase64URL.toBuffer(stored.credentialID),
-        credentialPublicKey: isoBase64URL.toBuffer(stored.credentialPublicKey),
+      credential: {
+        id: stored.credentialID,
+        publicKey: isoBase64URL.toBuffer(stored.credentialPublicKey),
         counter: stored.counter,
-        transports: stored.transports,
+        transports: normalizeAuthenticatorTransports(stored.transports),
       },
     })
 
