@@ -7,6 +7,7 @@ import { getStoredPasskey } from "@/lib/passkeys"
 import {
   getRpID,
   getRpName,
+  normalizeAuthenticatorTransports,
   getUserHandle,
   rememberRegistrationChallenge,
 } from "@/lib/webauthn"
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
         {
           id: existing.credentialID,
           type: "public-key",
-          transports: existing.transports,
+          transports: normalizeAuthenticatorTransports(existing.transports),
         },
       ]
     : []

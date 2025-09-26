@@ -1,10 +1,17 @@
 import { NextResponse } from "next/server"
 
 import { generateAuthenticationOptions } from "@simplewebauthn/server"
-import type { PublicKeyCredentialDescriptorJSON, PublicKeyCredentialRequestOptionsJSON } from "@simplewebauthn/types"
+import type {
+  PublicKeyCredentialDescriptorJSON,
+  PublicKeyCredentialRequestOptionsJSON,
+} from "@simplewebauthn/types"
 
 import { getStoredPasskey } from "@/lib/passkeys"
-import { getRpID, rememberAuthenticationChallenge } from "@/lib/webauthn"
+import {
+  getRpID,
+  normalizeAuthenticatorTransports,
+  rememberAuthenticationChallenge,
+} from "@/lib/webauthn"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -20,7 +27,7 @@ export async function GET(request: Request) {
     {
       id: stored.credentialID,
       type: "public-key",
-      transports: stored.transports,
+      transports: normalizeAuthenticatorTransports(stored.transports),
     },
   ]
 

@@ -9,6 +9,7 @@ import {
   consumeRegistrationChallenge,
   getExpectedOrigin,
   getRpID,
+  normalizeAuthenticatorTransports,
   getUserHandle,
 } from "@/lib/webauthn"
 
@@ -22,10 +23,10 @@ type RequestBody = {
 
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as RequestBody | null
-  const credential = body?.credential
+  const credentialResponse = body?.credential
   const masterPassword = body?.masterPassword
 
-  if (!credential || !masterPassword) {
+  if (!credentialResponse || !masterPassword) {
     return NextResponse.json({ error: "Credential response and master password are required" }, { status: 400 })
   }
 
@@ -36,7 +37,7 @@ export async function POST(request: Request) {
 
   try {
     const verification = await verifyRegistrationResponse({
-      response: credential,
+      response: credentialResponse,
       expectedChallenge,
       expectedOrigin: getExpectedOrigin(request),
       expectedRPID: getRpID(request),
@@ -47,14 +48,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unable to verify credential" }, { status: 400 })
     }
 
-    const { credentialPublicKey, credentialID, counter, credentialDeviceType, credentialBackedUp } =
-      verification.registrationInfo
+    const {
+      credential: verifiedCredential,
+      credentialDeviceType,
+      credentialBackedUp,
+    } = verification.registrationInfo
+    const { publicKey, id: credentialID, counter, transports } = verifiedCredential
 
     await saveStoredPasskey({
-      credentialID: isoBase64URL.fromBuffer(credentialID),
-      credentialPublicKey: isoBase64URL.fromBuffer(credentialPublicKey),
+      credentialID,
+      credentialPublicKey: isoBase64URL.fromBuffer(publicKey),
       counter,
-      transports: credential.response.transports,
+      transports: normalizeAuthenticatorTransports(transports),
       userHandle: getUserHandle(),
       masterPassword,
     })
