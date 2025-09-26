@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { decryptData, encryptData, InvalidPasswordError, type EncryptedPayload } from "@/lib/crypto"
 import { cn } from "@/lib/utils"
 import type {
+  AuthenticatorTransportFuture,
   AuthenticationResponseJSON,
   PublicKeyCredentialCreationOptionsJSON,
   PublicKeyCredentialRequestOptionsJSON,
@@ -65,6 +66,97 @@ const base64URLFromBuffer = (buffer: ArrayBuffer) => {
     binary += String.fromCharCode(bytes[i])
   }
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")
+}
+
+function isPublicKeyCredentialCreationOptionsJSON(
+  payload: unknown,
+): payload is PublicKeyCredentialCreationOptionsJSON {
+  if (!payload || typeof payload !== "object") {
+    return false
+  }
+
+  const candidate = payload as Partial<PublicKeyCredentialCreationOptionsJSON>
+  const { rp, user, pubKeyCredParams, challenge } = candidate
+
+  const hasRequiredRp = Boolean(rp && typeof rp === "object" && "name" in rp)
+  const hasRequiredUser = Boolean(
+    user && typeof user === "object" && typeof (user as { id?: unknown }).id === "string",
+  )
+
+  return (
+    typeof challenge === "string" &&
+    hasRequiredRp &&
+    hasRequiredUser &&
+    Array.isArray(pubKeyCredParams)
+  )
+}
+
+function isPublicKeyCredentialRequestOptionsJSON(
+  payload: unknown,
+): payload is PublicKeyCredentialRequestOptionsJSON {
+  if (!payload || typeof payload !== "object") {
+    return false
+  }
+
+  const candidate = payload as Partial<PublicKeyCredentialRequestOptionsJSON>
+  return typeof candidate.challenge === "string"
+}
+
+function toBrowserAuthenticatorTransports(
+  transports?: readonly AuthenticatorTransportFuture[],
+): AuthenticatorTransport[] | undefined {
+  if (!transports || transports.length === 0) {
+    return undefined
+  }
+
+  const supported: AuthenticatorTransport[] = []
+
+  transports.forEach((transport) => {
+    switch (transport) {
+      case "ble":
+      case "internal":
+      case "nfc":
+      case "usb":
+        supported.push(transport)
+        break
+      default:
+        break
+    }
+  })
+
+  return supported.length > 0 ? supported : undefined
+}
+
+function toAuthenticatorAttachment(value: unknown): AuthenticatorAttachment | undefined {
+  return value === "platform" || value === "cross-platform" ? value : undefined
+}
+
+function toAuthenticatorTransports(
+  transports?: readonly string[],
+): AuthenticatorTransportFuture[] | undefined {
+  if (!transports || transports.length === 0) {
+    return undefined
+  }
+
+  const supported: AuthenticatorTransportFuture[] = []
+
+  transports.forEach((transport) => {
+    switch (transport) {
+      case "ble":
+      case "cable":
+      case "hybrid":
+      case "internal":
+      case "nfc":
+      case "smart-card":
+      case "usb":
+        supported.push(transport)
+        break
+      default:
+        break
+    }
+  })
+
+  return supported.length > 0 ? supported : undefined
 }
 
 type VaultItem = PasswordEntry | CardEntry | IdentityEntry
@@ -424,6 +516,10 @@ export default function Home() {
         throw new Error((payload as { error?: string } | null)?.error ?? "Failed to start Face ID setup.")
       }
 
+      if (!isPublicKeyCredentialCreationOptionsJSON(payload)) {
+        throw new Error("Invalid Face ID registration options received.")
+      }
+
       const publicKey: PublicKeyCredentialCreationOptions = {
         ...payload,
         challenge: bufferFromBase64URL(payload.challenge),
@@ -434,6 +530,7 @@ export default function Home() {
         excludeCredentials: payload.excludeCredentials?.map((item) => ({
           ...item,
           id: bufferFromBase64URL(item.id),
+          transports: toBrowserAuthenticatorTransports(item.transports),
         })),
       }
 
@@ -442,24 +539,30 @@ export default function Home() {
         throw new Error("Face ID setup was cancelled.")
       }
 
+      if (credential.type !== "public-key") {
+        throw new Error("Unsupported credential type returned by browser.")
+      }
+
       const attestationResponse = credential.response as AuthenticatorAttestationResponse
       if (!attestationResponse?.attestationObject) {
         throw new Error("Invalid Face ID response.")
       }
 
-      const transports = (attestationResponse as unknown as { getTransports?: () => string[] }).getTransports?.()
+      const transports = toAuthenticatorTransports(
+        (attestationResponse as unknown as { getTransports?: () => string[] }).getTransports?.(),
+      )
 
       const credentialJSON: RegistrationResponseJSON = {
         id: credential.id,
         rawId: base64URLFromBuffer(credential.rawId),
         type: credential.type,
-        authenticatorAttachment: credential.authenticatorAttachment ?? undefined,
+        authenticatorAttachment: toAuthenticatorAttachment(credential.authenticatorAttachment),
         response: {
           clientDataJSON: base64URLFromBuffer(attestationResponse.clientDataJSON),
           attestationObject: base64URLFromBuffer(attestationResponse.attestationObject),
+          transports,
         },
         clientExtensionResults: credential.getClientExtensionResults(),
-        transports: transports && transports.length > 0 ? transports : undefined,
       }
 
       const verifyRes = await fetch("/api/webauthn/register/verify", {
@@ -507,12 +610,17 @@ export default function Home() {
         throw new Error((payload as { error?: string } | null)?.error ?? "Face ID is not set up yet.")
       }
 
+      if (!isPublicKeyCredentialRequestOptionsJSON(payload)) {
+        throw new Error("Invalid Face ID authentication options received.")
+      }
+
       const publicKey: PublicKeyCredentialRequestOptions = {
         ...payload,
         challenge: bufferFromBase64URL(payload.challenge),
         allowCredentials: payload.allowCredentials?.map((item) => ({
           ...item,
           id: bufferFromBase64URL(item.id),
+          transports: toBrowserAuthenticatorTransports(item.transports),
         })),
       }
 
@@ -521,13 +629,17 @@ export default function Home() {
         throw new Error("Face ID authentication was cancelled.")
       }
 
+      if (credential.type !== "public-key") {
+        throw new Error("Unsupported credential type returned by browser.")
+      }
+
       const assertionResponse = credential.response as AuthenticatorAssertionResponse
 
       const credentialJSON: AuthenticationResponseJSON = {
         id: credential.id,
         rawId: base64URLFromBuffer(credential.rawId),
         type: credential.type,
-        authenticatorAttachment: credential.authenticatorAttachment ?? undefined,
+        authenticatorAttachment: toAuthenticatorAttachment(credential.authenticatorAttachment),
         clientExtensionResults: credential.getClientExtensionResults(),
         response: {
           clientDataJSON: base64URLFromBuffer(assertionResponse.clientDataJSON),
