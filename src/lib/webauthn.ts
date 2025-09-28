@@ -49,7 +49,36 @@ export function getExpectedOrigin(request: Request) {
     return origin
   }
 
-  const proto = request.headers.get("x-forwarded-proto") ?? "https"
+  try {
+    const url = new URL(request.url)
+    if (url.origin) {
+      return url.origin
+    }
+  } catch {
+    // Ignore URL parsing failures and fall through to header-derived values.
+  }
+
+  const forwarded = request.headers.get("forwarded")
+  let forwardedProto: string | null = null
+
+  if (forwarded) {
+    const entries = forwarded.split(",")
+    for (const entry of entries) {
+      const directives = entry.split(";")
+      for (const directive of directives) {
+        const [rawKey, rawValue] = directive.split("=")
+        if (rawKey?.trim().toLowerCase() === "proto" && rawValue) {
+          forwardedProto = rawValue.trim().replace(/^"|"$/g, "")
+          break
+        }
+      }
+      if (forwardedProto) {
+        break
+      }
+    }
+  }
+
+  const proto = forwardedProto ?? request.headers.get("x-forwarded-proto") ?? "https"
   const host = request.headers.get("host") ?? "localhost"
   return `${proto}://${host}`
 }
