@@ -20,13 +20,6 @@ import { Textarea } from "@/components/ui/textarea"
 import { decryptData, encryptData, InvalidPasswordError, type EncryptedPayload } from "@/lib/crypto"
 import { cn } from "@/lib/utils"
 import type {
-  AuthenticatorTransportFuture,
-  AuthenticationResponseJSON,
-  PublicKeyCredentialCreationOptionsJSON,
-  PublicKeyCredentialRequestOptionsJSON,
-  RegistrationResponseJSON,
-} from "@simplewebauthn/types"
-import type {
   CardEntry,
   IdentityEntry,
   PasswordEntry,
@@ -46,117 +39,6 @@ const generateId = () => {
 const formatCardNumberInput = (rawValue: string) => {
   const digitsOnly = rawValue.replace(/\D/g, "").slice(0, 16)
   return digitsOnly.replace(/(\d{4})(?=\d)/g, "$1 ")
-}
-
-const bufferFromBase64URL = (value: string) => {
-  const normalized = value.replace(/-/g, "+").replace(/_/g, "/")
-  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=")
-  const binary = atob(padded)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i)
-  }
-  return bytes
-}
-
-const base64URLFromBuffer = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer)
-  let binary = ""
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i])
-  }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "")
-}
-
-function isPublicKeyCredentialCreationOptionsJSON(
-  payload: unknown,
-): payload is PublicKeyCredentialCreationOptionsJSON {
-  if (!payload || typeof payload !== "object") {
-    return false
-  }
-
-  const candidate = payload as Partial<PublicKeyCredentialCreationOptionsJSON>
-  const { rp, user, pubKeyCredParams, challenge } = candidate
-
-  const hasRequiredRp = Boolean(rp && typeof rp === "object" && "name" in rp)
-  const hasRequiredUser = Boolean(
-    user && typeof user === "object" && typeof (user as { id?: unknown }).id === "string",
-  )
-
-  return (
-    typeof challenge === "string" &&
-    hasRequiredRp &&
-    hasRequiredUser &&
-    Array.isArray(pubKeyCredParams)
-  )
-}
-
-function isPublicKeyCredentialRequestOptionsJSON(
-  payload: unknown,
-): payload is PublicKeyCredentialRequestOptionsJSON {
-  if (!payload || typeof payload !== "object") {
-    return false
-  }
-
-  const candidate = payload as Partial<PublicKeyCredentialRequestOptionsJSON>
-  return typeof candidate.challenge === "string"
-}
-
-function toBrowserAuthenticatorTransports(
-  transports?: readonly AuthenticatorTransportFuture[],
-): AuthenticatorTransport[] | undefined {
-  if (!transports || transports.length === 0) {
-    return undefined
-  }
-
-  const supported: AuthenticatorTransport[] = []
-
-  transports.forEach((transport) => {
-    switch (transport) {
-      case "ble":
-      case "internal":
-      case "nfc":
-      case "usb":
-        supported.push(transport)
-        break
-      default:
-        break
-    }
-  })
-
-  return supported.length > 0 ? supported : undefined
-}
-
-function toAuthenticatorAttachment(value: unknown): AuthenticatorAttachment | undefined {
-  return value === "platform" || value === "cross-platform" ? value : undefined
-}
-
-function toAuthenticatorTransports(
-  transports?: readonly string[],
-): AuthenticatorTransportFuture[] | undefined {
-  if (!transports || transports.length === 0) {
-    return undefined
-  }
-
-  const supported: AuthenticatorTransportFuture[] = []
-
-  transports.forEach((transport) => {
-    switch (transport) {
-      case "ble":
-      case "cable":
-      case "hybrid":
-      case "internal":
-      case "nfc":
-      case "smart-card":
-      case "usb":
-        supported.push(transport)
-        break
-      default:
-        break
-    }
-  })
-
-  return supported.length > 0 ? supported : undefined
 }
 
 type VaultItem = PasswordEntry | CardEntry | IdentityEntry
@@ -258,11 +140,6 @@ export default function Home() {
   const [formState, setFormState] = useState<Record<string, string>>({})
 
   const [activeTab, setActiveTab] = useState<VaultCategory>("passwords")
-  const [isPasskeySupported, setIsPasskeySupported] = useState(false)
-  const [passkeyEnabled, setPasskeyEnabled] = useState(false)
-  const [isRegisteringPasskey, setIsRegisteringPasskey] = useState(false)
-  const [isAuthenticatingPasskey, setIsAuthenticatingPasskey] = useState(false)
-
   const unlocked = useMemo(() => vaultData !== null && sessionPassword !== null, [vaultData, sessionPassword])
 
   const showLoading = vaultExists === null
@@ -325,32 +202,6 @@ export default function Home() {
   }, [checkVaultStatus])
 
   useEffect(() => {
-    if (typeof window === "undefined" || !("PublicKeyCredential" in window)) {
-      setIsPasskeySupported(false)
-      return
-    }
-
-    let cancelled = false
-
-    PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable?.()
-      .then((available) => {
-        if (!cancelled) {
-          setIsPasskeySupported(Boolean(available))
-        }
-      })
-      .catch((error) => {
-        console.error(error)
-        if (!cancelled) {
-          setIsPasskeySupported(false)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
     if (typeof window === "undefined" || !('serviceWorker' in navigator) || process.env.NODE_ENV !== 'production') {
       return
     }
@@ -365,31 +216,6 @@ export default function Home() {
 
     void register()
   }, [])
-
-  const refreshPasskeyStatus = useCallback(async () => {
-    try {
-      const res = await fetch("/api/webauthn/status")
-      const payload = (await res.json().catch(() => null)) as { enabled?: boolean } | null
-
-      if (!res.ok) {
-        setPasskeyEnabled(false)
-        return
-      }
-
-      setPasskeyEnabled(Boolean(payload?.enabled))
-    } catch (error) {
-      console.error(error)
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!isPasskeySupported) {
-      setPasskeyEnabled(false)
-      return
-    }
-
-    void refreshPasskeyStatus()
-  }, [isPasskeySupported, refreshPasskeyStatus])
 
   const handleInitialize = useCallback(
     async (event: React.FormEvent<HTMLFormElement>) => {
@@ -490,197 +316,6 @@ export default function Home() {
     setSessionPassword(null)
     setFeedback({ type: "success", message: "Vault locked." })
   }, [])
-
-  const handleEnablePasskey = useCallback(async () => {
-    if (!sessionPassword) {
-      setFeedback({ type: "error", message: "Unlock the vault to continue." })
-      return
-    }
-
-    if (!isPasskeySupported || typeof navigator === "undefined" || !navigator.credentials) {
-      setFeedback({ type: "error", message: "Face ID is not available on this device." })
-      return
-    }
-
-    setFeedback(null)
-    setIsRegisteringPasskey(true)
-
-    try {
-      const res = await fetch("/api/webauthn/register/options")
-      const payload = (await res.json().catch(() => null)) as
-        | (PublicKeyCredentialCreationOptionsJSON & { error?: string })
-        | { error?: string }
-        | null
-
-      if (!res.ok || !payload || "error" in payload) {
-        throw new Error((payload as { error?: string } | null)?.error ?? "Failed to start Face ID setup.")
-      }
-
-      if (!isPublicKeyCredentialCreationOptionsJSON(payload)) {
-        throw new Error("Invalid Face ID registration options received.")
-      }
-
-      const publicKey: PublicKeyCredentialCreationOptions = {
-        ...payload,
-        challenge: bufferFromBase64URL(payload.challenge),
-        user: {
-          ...payload.user,
-          id: bufferFromBase64URL(payload.user.id),
-        },
-        excludeCredentials: payload.excludeCredentials?.map((item) => ({
-          ...item,
-          id: bufferFromBase64URL(item.id),
-          transports: toBrowserAuthenticatorTransports(item.transports),
-        })),
-      }
-
-      const credential = (await navigator.credentials.create({ publicKey })) as PublicKeyCredential | null
-      if (!credential) {
-        throw new Error("Face ID setup was cancelled.")
-      }
-
-      if (credential.type !== "public-key") {
-        throw new Error("Unsupported credential type returned by browser.")
-      }
-
-      const attestationResponse = credential.response as AuthenticatorAttestationResponse
-      if (!attestationResponse?.attestationObject) {
-        throw new Error("Invalid Face ID response.")
-      }
-
-      const transports = toAuthenticatorTransports(
-        (attestationResponse as unknown as { getTransports?: () => string[] }).getTransports?.(),
-      )
-
-      const credentialJSON: RegistrationResponseJSON = {
-        id: credential.id,
-        rawId: base64URLFromBuffer(credential.rawId),
-        type: credential.type,
-        authenticatorAttachment: toAuthenticatorAttachment(credential.authenticatorAttachment),
-        response: {
-          clientDataJSON: base64URLFromBuffer(attestationResponse.clientDataJSON),
-          attestationObject: base64URLFromBuffer(attestationResponse.attestationObject),
-          transports,
-        },
-        clientExtensionResults: credential.getClientExtensionResults(),
-      }
-
-      const verifyRes = await fetch("/api/webauthn/register/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: credentialJSON, masterPassword: sessionPassword }),
-      })
-      const verifyPayload = (await verifyRes.json().catch(() => null)) as { success?: boolean; error?: string } | null
-
-      if (!verifyRes.ok || !verifyPayload?.success) {
-        throw new Error(verifyPayload?.error ?? "Failed to verify Face ID setup.")
-      }
-
-      await refreshPasskeyStatus()
-      setPasskeyEnabled(true)
-      setFeedback({ type: "success", message: "Face ID is enabled for this device." })
-    } catch (error) {
-      console.error(error)
-      setFeedback({ type: "error", message: error instanceof Error ? error.message : "Unable to enable Face ID." })
-    } finally {
-      setIsRegisteringPasskey(false)
-    }
-  }, [isPasskeySupported, refreshPasskeyStatus, sessionPassword])
-
-  const handlePasskeyUnlock = useCallback(async () => {
-    if (!isPasskeySupported || !passkeyEnabled || typeof navigator === "undefined" || !navigator.credentials) {
-      setFeedback({ type: "error", message: "Face ID is not available on this device." })
-      return
-    }
-
-    setFeedback(null)
-    setIsAuthenticatingPasskey(true)
-
-    try {
-      const res = await fetch("/api/webauthn/authenticate/options")
-      const payload = (await res.json().catch(() => null)) as
-        | (PublicKeyCredentialRequestOptionsJSON & { error?: string })
-        | { error?: string }
-        | null
-
-      if (!res.ok || !payload || "error" in payload) {
-        if (res.status === 404) {
-          setPasskeyEnabled(false)
-        }
-        throw new Error((payload as { error?: string } | null)?.error ?? "Face ID is not set up yet.")
-      }
-
-      if (!isPublicKeyCredentialRequestOptionsJSON(payload)) {
-        throw new Error("Invalid Face ID authentication options received.")
-      }
-
-      const publicKey: PublicKeyCredentialRequestOptions = {
-        ...payload,
-        challenge: bufferFromBase64URL(payload.challenge),
-        allowCredentials: payload.allowCredentials?.map((item) => ({
-          ...item,
-          id: bufferFromBase64URL(item.id),
-          transports: toBrowserAuthenticatorTransports(item.transports),
-        })),
-      }
-
-      const credential = (await navigator.credentials.get({ publicKey })) as PublicKeyCredential | null
-      if (!credential) {
-        throw new Error("Face ID authentication was cancelled.")
-      }
-
-      if (credential.type !== "public-key") {
-        throw new Error("Unsupported credential type returned by browser.")
-      }
-
-      const assertionResponse = credential.response as AuthenticatorAssertionResponse
-
-      const credentialJSON: AuthenticationResponseJSON = {
-        id: credential.id,
-        rawId: base64URLFromBuffer(credential.rawId),
-        type: credential.type,
-        authenticatorAttachment: toAuthenticatorAttachment(credential.authenticatorAttachment),
-        clientExtensionResults: credential.getClientExtensionResults(),
-        response: {
-          clientDataJSON: base64URLFromBuffer(assertionResponse.clientDataJSON),
-          authenticatorData: base64URLFromBuffer(assertionResponse.authenticatorData),
-          signature: base64URLFromBuffer(assertionResponse.signature),
-          userHandle: assertionResponse.userHandle
-            ? base64URLFromBuffer(assertionResponse.userHandle)
-            : undefined,
-        },
-      }
-
-      const verifyRes = await fetch("/api/webauthn/authenticate/verify", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: credentialJSON }),
-      })
-      const verifyPayload = (await verifyRes.json().catch(() => null)) as {
-        success?: boolean
-        masterPassword?: string
-        error?: string
-      } | null
-
-      if (!verifyRes.ok || !verifyPayload?.success || !verifyPayload.masterPassword) {
-        if (verifyRes.status === 404) {
-          setPasskeyEnabled(false)
-        }
-        throw new Error(verifyPayload?.error ?? "Face ID authentication failed.")
-      }
-
-      await unlockWithPassword(verifyPayload.masterPassword)
-    } catch (error) {
-      console.error(error)
-      if (error instanceof InvalidPasswordError) {
-        setFeedback({ type: "error", message: "Stored Face ID credential is no longer valid." })
-      } else {
-        setFeedback({ type: "error", message: error instanceof Error ? error.message : "Face ID authentication failed." })
-      }
-    } finally {
-      setIsAuthenticatingPasskey(false)
-    }
-  }, [isPasskeySupported, passkeyEnabled, unlockWithPassword])
 
   const persistVault = useCallback(
     async (data: VaultData, successMessage: string) => {
@@ -1021,18 +656,6 @@ export default function Home() {
                 <Button className="w-full" size="lg" disabled={isUnlocking}>
                   {isUnlocking ? "Decrypting…" : "Unlock"}
                 </Button>
-                {isPasskeySupported && passkeyEnabled ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="w-full"
-                    size="lg"
-                    onClick={() => void handlePasskeyUnlock()}
-                    disabled={isAuthenticatingPasskey}
-                  >
-                    {isAuthenticatingPasskey ? "Authenticating…" : "Unlock with Face ID"}
-                  </Button>
-                ) : null}
               </form>
             </CardContent>
           </Card>
@@ -1046,23 +669,6 @@ export default function Home() {
                 <p className="text-sm text-muted-foreground">Your encrypted data stays on this device unless you export it.</p>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {isPasskeySupported ? (
-                  passkeyEnabled ? (
-                    <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-200">
-                      Face ID enabled
-                    </span>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="rounded-full border-border/60 bg-background/70 px-4"
-                      onClick={() => void handleEnablePasskey()}
-                      disabled={isRegisteringPasskey}
-                    >
-                      {isRegisteringPasskey ? "Enabling…" : "Enable Face ID"}
-                    </Button>
-                  )
-                ) : null}
                 <Button
                   variant="outline"
                   size="sm"
