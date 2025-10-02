@@ -10,7 +10,7 @@ export const metadata = {
 export default function VisaPage() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col items-center gap-8 px-4 py-16 text-center">
-      <div className="w-full max-w-4xl">
+      <div className="w-full max-w-4xl space-y-8">
         <Image
           src="/visa-photo.png"
           alt="Your immigration status (eVisa)"
@@ -19,11 +19,15 @@ export default function VisaPage() {
           className="h-auto w-full rounded-xl border border-border bg-white shadow-sm"
           priority
         />
+        <Image
+          src="/visa-photo-2.png"
+          alt="Your immigration status (eVisa)"
+          width={960}
+          height={540}
+          className="h-auto w-full rounded-xl border border-border bg-white shadow-sm"
+        />
       </div>
       <div className="flex flex-col items-center gap-2">
-        <p className="text-base text-muted-foreground">
-          Visit the official GOV.UK service to view or prove your immigration status.
-        </p>
         <Link
           href="https://view-immigration-status.service.gov.uk/status"
           target="_blank"
