@@ -12,8 +12,8 @@ export default function VisaPage() {
     <main className="mx-auto flex min-h-screen w-full max-w-5xl flex-col items-center gap-8 px-4 py-16 text-center">
       <div className="w-full max-w-4xl">
         <Image
-          src="/visa-status.svg"
-          alt="Example UK immigration status eVisa summary"
+          src="/visa-photo.png"
+          alt="Your immigration status (eVisa)"
           width={960}
           height={540}
           className="h-auto w-full rounded-xl border border-border bg-white shadow-sm"
