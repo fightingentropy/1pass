@@ -793,7 +793,7 @@ export default function Home() {
       </main>
 
       {feedback ? (
-        <div className="pointer-events-none fixed inset-x-4 top-4 z-50 flex justify-end sm:inset-x-auto sm:right-6">
+        <div className="pointer-events-none fixed inset-x-4 bottom-4 z-50 flex justify-end sm:inset-x-auto sm:right-6 sm:bottom-auto sm:top-4">
           <div
             className={cn(
               "pointer-events-auto w-full max-w-sm rounded-lg px-4 py-3 text-sm shadow-lg",
