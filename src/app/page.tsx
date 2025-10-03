@@ -561,7 +561,7 @@ export default function Home() {
     <>
       <main
         className={cn(
-          "flex w-full flex-1 flex-col gap-8 sm:gap-10",
+          "flex w-full flex-1 flex-col gap-6 sm:gap-10",
           shouldCenter ? "items-center justify-center" : "pb-4"
         )}
       >

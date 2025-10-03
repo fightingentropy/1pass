@@ -44,8 +44,8 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body className="antialiased min-h-screen bg-background text-foreground font-sans">
-        <div className="relative mx-auto flex min-h-screen w-full max-w-5xl flex-col bg-gradient-to-b from-background via-background/95 to-background px-4 pb-16 pt-12 sm:px-6 sm:pb-20">
+      <body className="antialiased min-h-[100svh] bg-background text-foreground font-sans">
+        <div className="relative mx-auto flex min-h-[100svh] w-full max-w-5xl flex-col bg-gradient-to-b from-background via-background/95 to-background px-4 pb-[max(env(safe-area-inset-bottom),1.5rem)] pt-[max(env(safe-area-inset-top),2rem)] sm:px-6 sm:pb-20 sm:pt-16">
           <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-48 bg-[radial-gradient(circle_at_top,_rgba(79,70,229,0.18)_0%,_rgba(79,70,229,0)_75%)]" />
           {children}
         </div>
