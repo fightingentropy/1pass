@@ -3,8 +3,8 @@ const APP_SHELL = [
   "/",
   "/offline.html",
   "/manifest.webmanifest",
-  "/icon-192.png",
-  "/icon-512.png",
+  "/1pass-icon-192.png",
+  "/1pass-icon-512.png",
 ]
 
 self.addEventListener("install", (event) => {
