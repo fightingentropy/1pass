@@ -16,14 +16,13 @@ export const metadata: Metadata = {
   },
   icons: {
     icon: [
-      { url: "/icon.svg", type: "image/svg+xml", sizes: "any" },
+      { url: "/favicon.ico", sizes: "any" },
       { url: "/1pass-icon-192.png", sizes: "192x192", type: "image/png" },
       { url: "/1pass-icon-512.png", sizes: "512x512", type: "image/png" },
     ],
     apple: [
       { url: "/1pass-icon-192.png", sizes: "180x180", type: "image/png" },
     ],
-    shortcut: ["/icon.svg"],
   },
 }
 
