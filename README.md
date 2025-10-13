@@ -1,48 +1,64 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# 1Pass Vault
+
+A secure, client-side password manager built with Next.js 16, React 19, and Web Crypto API.
 
 ## Getting Started
 
-First, install dependencies and run the development server:
-
 ```bash
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) to access the vault.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Tech Stack
 
-### Local vault storage
+- **Next.js 16 Canary** with Turbopack
+- **React 19** with React Compiler enabled
+- **TypeScript 5** with strict mode
+- **Tailwind CSS 4** for styling
+- **Web Crypto API** for encryption (PBKDF2 + AES-GCM)
 
-During local development the encrypted vault is persisted in `data/vault.json`. This mirrors the structure used in production, making it easy to inspect or reset the vault while iterating locally.
+## Features
 
-### Security model
+- 🔐 Client-side encryption (master password never leaves your device)
+- 💾 Store passwords, credit cards, and identity information
+- 🚀 Optimized for performance (memoization, transitions, image optimization)
+- 📱 Responsive design with modern UI
+- 🔄 Vercel Blob storage for production deployments
 
-- All encryption and decryption happens in the browser using the Web Crypto API, so the master password never leaves the device.
-- API routes only shuttle the encrypted payload to disk (local filesystem or Vercel Blob) and never see plaintext secrets.
-- Encrypted payloads include algorithm metadata and integrity tags; tampered PBKDF2 iteration counts are rejected to avoid resource exhaustion attacks.
+## Security
 
-## Deploying to Vercel
+- All encryption/decryption happens in-browser using Web Crypto API
+- Master password never leaves your device
+- API routes only handle encrypted payloads
+- Uses PBKDF2 (310k iterations) + AES-GCM-256
+- Integrity tags prevent tampering
 
-1. Enable **Vercel Blob** for the project from the Vercel dashboard (`Storage → Blob`).
-2. Copy the generated `BLOB_READ_WRITE_TOKEN` and add it as an environment variable in the Vercel project settings (Environment Variables → Add).
-3. Optionally customise `VAULT_BLOB_PREFIX` or `VAULT_BLOB_KEY` if you need a different location for the encrypted vault record.
-4. Redeploy the project. On the first launch, initialise the vault through the UI or by calling `POST /api/vault/init`.
+## Local Development
 
-> **Note:** Vercel's blob SDK now requires uploads via tokens to use `public` access. The vault contents stay protected because every record is encrypted client-side, but you should still keep the blob token secret and optionally set `VAULT_BLOB_PREFIX` to a long random string to make the blob path hard to guess.
+Encrypted vault is stored in `data/vault.json` during development.
 
-## Environment variables
+## Production Deployment
 
-- `BLOB_READ_WRITE_TOKEN` &mdash; required in production to read and write the encrypted vault to Vercel Blob.
-- `VAULT_BLOB_PREFIX` (optional) &mdash; folder-like prefix used when storing the vault, defaults to `vaults`.
-- `VAULT_BLOB_KEY` (optional) &mdash; filename used within the prefix, defaults to `vault.json`.
+### Vercel Blob Setup
 
-An `.env.example` file is provided as a reference for local configuration.
+1. Enable **Vercel Blob** in project dashboard
+2. Add `BLOB_READ_WRITE_TOKEN` to environment variables
+3. Optional: Set `VAULT_BLOB_PREFIX` for custom storage path
+4. Deploy and initialize vault via UI
 
-## Learn More
+### Environment Variables
 
-To learn more about Next.js, take a look at the following resources:
+- `BLOB_READ_WRITE_TOKEN` - Required for production Vercel Blob storage
+- `VAULT_BLOB_PREFIX` - Optional, defaults to `vaults`
+- `VAULT_BLOB_KEY` - Optional, defaults to `vault.json`
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Performance Optimizations
+
+- React Compiler for automatic optimizations
+- Memoized components and callbacks
+- React transitions for smooth interactions
+- Turbopack for fast builds (~2.4s)
+- Modern image formats (AVIF, WebP)
+- Optimized crypto operations with caching

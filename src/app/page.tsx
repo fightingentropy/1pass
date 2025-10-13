@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { memo, useCallback, useEffect, useMemo, useState, startTransition } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -142,10 +142,10 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<VaultCategory>("passwords")
   const unlocked = useMemo(() => vaultData !== null && sessionPassword !== null, [vaultData, sessionPassword])
 
-  const showLoading = vaultExists === null
-  const showSetup = vaultExists === false
-  const showUnlock = vaultExists === true && !unlocked
-  const shouldCenter = showLoading || showSetup || showUnlock
+  const showLoading = useMemo(() => vaultExists === null, [vaultExists])
+  const showSetup = useMemo(() => vaultExists === false, [vaultExists])
+  const showUnlock = useMemo(() => vaultExists === true && !unlocked, [vaultExists, unlocked])
+  const shouldCenter = useMemo(() => showLoading || showSetup || showUnlock, [showLoading, showSetup, showUnlock])
 
   useEffect(() => {
     if (!dialogState) {
@@ -185,7 +185,10 @@ export default function Home() {
 
   const checkVaultStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/vault/status")
+      const res = await fetch("/api/vault/status", {
+        // Disable caching for vault status checks
+        cache: 'no-store'
+      })
       if (!res.ok) {
         throw new Error("Failed to determine vault status")
       }
@@ -435,12 +438,15 @@ export default function Home() {
         value = formatCardNumberInput(rawValue)
       }
 
-      setFormState((prev) => ({ ...prev, [fieldKey]: value }))
+      // Use startTransition for non-urgent state updates
+      startTransition(() => {
+        setFormState((prev) => ({ ...prev, [fieldKey]: value }))
+      })
     },
     [dialogState]
   )
 
-  const renderEmptyState = (category: VaultCategory) => {
+  const renderEmptyState = useCallback((category: VaultCategory) => {
     const config = CATEGORY_CONFIG[category]
 
     return (
@@ -452,9 +458,9 @@ export default function Home() {
         </Button>
       </div>
     )
-  }
+  }, [])
 
-  const renderPasswordEntry = (entry: PasswordEntry) => (
+  const renderPasswordEntry = useCallback((entry: PasswordEntry) => (
     <Card key={entry.id} className="rounded-2xl border border-border/70 bg-background/70 shadow-sm backdrop-blur">
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
@@ -481,9 +487,9 @@ export default function Home() {
         {entry.notes ? <DetailRow label="Notes" value={entry.notes} multiline /> : null}
       </CardContent>
     </Card>
-  )
+  ), [handleCopy, handleDelete])
 
-  const renderCardEntry = (entry: CardEntry) => {
+  const renderCardEntry = useCallback((entry: CardEntry) => {
     const expiry = [entry.expiryMonth, entry.expiryYear].filter(Boolean).join('/')
 
     return (
@@ -518,9 +524,9 @@ export default function Home() {
         </CardContent>
       </Card>
     )
-  }
+  }, [handleCopy, handleDelete])
 
-  const renderIdentityEntry = (entry: IdentityEntry) => (
+  const renderIdentityEntry = useCallback((entry: IdentityEntry) => (
     <Card key={entry.id} className="rounded-2xl border border-border/70 bg-background/70 shadow-sm backdrop-blur">
       <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div>
@@ -555,7 +561,7 @@ export default function Home() {
         {entry.notes ? <DetailRow label="Notes" value={entry.notes} multiline /> : null}
       </CardContent>
     </Card>
-  )
+  ), [handleCopy, handleDelete])
 
   return (
     <>
@@ -685,9 +691,27 @@ export default function Home() {
 
             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as VaultCategory)} className="flex-1">
               <TabsList className="w-full overflow-x-auto rounded-full border border-border/60 bg-muted/50 p-1 text-sm shadow-sm sm:w-auto gap-1">
-                <TabsTrigger value="passwords" className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm">Passwords</TabsTrigger>
-                <TabsTrigger value="cards" className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm">Cards</TabsTrigger>
-                <TabsTrigger value="identities" className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm">Identities</TabsTrigger>
+                <TabsTrigger 
+                  value="passwords" 
+                  className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm"
+                  onClick={() => startTransition(() => setActiveTab("passwords"))}
+                >
+                  Passwords
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="cards" 
+                  className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm"
+                  onClick={() => startTransition(() => setActiveTab("cards"))}
+                >
+                  Cards
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="identities" 
+                  className="rounded-full px-4 py-2 text-xs font-medium sm:px-6 sm:text-sm"
+                  onClick={() => startTransition(() => setActiveTab("identities"))}
+                >
+                  Identities
+                </TabsTrigger>
               </TabsList>
               <TabsContent value="passwords" className="mt-6 space-y-5">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -820,7 +844,7 @@ type DetailRowProps = {
   onCopy?: (value: string) => void
 }
 
-function DetailRow({ label, value, mask, multiline, onCopy }: DetailRowProps) {
+const DetailRow = memo(function DetailRow({ label, value, mask, multiline, onCopy }: DetailRowProps) {
   if (!value) return null
 
   const displayValue = mask ? "••••••••" : value
@@ -844,4 +868,4 @@ function DetailRow({ label, value, mask, multiline, onCopy }: DetailRowProps) {
       <div className={cn("text-foreground", multiline ? "whitespace-pre-line" : "truncate font-medium")}>{displayValue}</div>
     </div>
   )
-}
+})
