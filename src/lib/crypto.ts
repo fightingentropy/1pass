@@ -24,19 +24,25 @@ function toArrayBuffer(view: Uint8Array): ArrayBuffer {
   return copy.buffer
 }
 
-let resolvedCrypto: Crypto | null =
-  typeof globalThis.crypto !== "undefined" && "subtle" in globalThis.crypto
-    ? (globalThis.crypto as Crypto)
-    : null
+// Cache crypto instance for better performance
+let resolvedCrypto: Crypto | null = null
+let cryptoInitialized = false
 
 async function getCrypto(): Promise<Crypto> {
-  if (resolvedCrypto) {
+  if (cryptoInitialized && resolvedCrypto) {
+    return resolvedCrypto
+  }
+
+  if (typeof globalThis.crypto !== "undefined" && "subtle" in globalThis.crypto) {
+    resolvedCrypto = globalThis.crypto as Crypto
+    cryptoInitialized = true
     return resolvedCrypto
   }
 
   if (typeof process !== "undefined" && typeof process.versions?.node === "string") {
     const { webcrypto } = await import("crypto")
     resolvedCrypto = webcrypto as unknown as Crypto
+    cryptoInitialized = true
     return resolvedCrypto
   }
 
@@ -48,11 +54,8 @@ function toBase64(bytes: Uint8Array) {
     return Buffer.from(bytes).toString("base64")
   }
 
-  let binary = ""
-  bytes.forEach((byte) => {
-    binary += String.fromCharCode(byte)
-  })
-
+  // Optimize by using a single array join instead of string concatenation
+  const binary = Array.from(bytes, (byte) => String.fromCharCode(byte)).join("")
   return btoa(binary)
 }
 
@@ -63,7 +66,9 @@ function fromBase64(value: string) {
 
   const binary = atob(value)
   const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
+  
+  // Optimize loop performance
+  for (let index = 0, len = binary.length; index < len; index++) {
     bytes[index] = binary.charCodeAt(index)
   }
 

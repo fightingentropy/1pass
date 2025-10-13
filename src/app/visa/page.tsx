@@ -18,6 +18,7 @@ export default function VisaPage() {
           height={540}
           className="h-auto w-full rounded-xl border border-border bg-white shadow-sm"
           priority
+          quality={85}
         />
         <Image
           src="/visa-photo-2.png"
@@ -25,6 +26,8 @@ export default function VisaPage() {
           width={960}
           height={540}
           className="h-auto w-full rounded-xl border border-border bg-white shadow-sm"
+          loading="lazy"
+          quality={85}
         />
       </div>
       <div className="flex flex-col items-center gap-2">
