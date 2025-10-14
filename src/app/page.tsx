@@ -671,7 +671,17 @@ export default function Home() {
           <section className="flex flex-1 flex-col gap-8">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-1">
-                <h2 className="text-2xl font-semibold text-foreground">Vault contents</h2>
+                <div className="flex items-center gap-4">
+                  <h2 className="text-2xl font-semibold text-foreground">Vault contents</h2>
+                  <Button
+                    variant="link"
+                    size="sm"
+                    asChild
+                    className="text-sm"
+                  >
+                    <a href="/visa">Visa</a>
+                  </Button>
+                </div>
                 <p className="text-sm text-muted-foreground">Your encrypted data stays on this device unless you export it.</p>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
