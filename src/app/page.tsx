@@ -1,6 +1,7 @@
 "use client"
 
 import { memo, useCallback, useEffect, useMemo, useState, startTransition } from "react"
+import Image from "next/image"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -579,7 +580,10 @@ export default function Home() {
           )}
         >
           <div className="space-y-2 sm:max-w-xl">
-            <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">1Pass Vault</h1>
+            <div className="flex items-center gap-3">
+              <Image src="/globe.svg" alt="1Pass logo" width={36} height={36} priority className="opacity-90" />
+              <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">1Pass Vault</h1>
+            </div>
           </div>
         </header>
 
