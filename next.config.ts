@@ -1,8 +1,10 @@
 import type { NextConfig } from "next";
 
+const useReactCompiler = process.env.NEXT_USE_REACT_COMPILER === "true";
+
 const nextConfig: NextConfig = {
-  // Enable React Compiler for automatic optimizations (moved to top-level in Next.js 16)
-  reactCompiler: true,
+  // React Compiler is opt-in until the Babel plugin resolves correctly in the current toolchain.
+  reactCompiler: useReactCompiler || undefined,
   
   // Optimize images
   images: {
