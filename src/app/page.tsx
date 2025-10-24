@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useState, startTransition } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, startTransition } from "react"
 import Image from "next/image"
 
 import { Button } from "@/components/ui/button"
@@ -141,12 +141,25 @@ export default function Home() {
   const [formState, setFormState] = useState<Record<string, string>>({})
 
   const [activeTab, setActiveTab] = useState<VaultCategory>("passwords")
+  const setupPasswordRef = useRef<HTMLInputElement | null>(null)
+  const unlockPasswordRef = useRef<HTMLInputElement | null>(null)
   const unlocked = useMemo(() => vaultData !== null && sessionPassword !== null, [vaultData, sessionPassword])
 
   const showLoading = useMemo(() => vaultExists === null, [vaultExists])
   const showSetup = useMemo(() => vaultExists === false, [vaultExists])
   const showUnlock = useMemo(() => vaultExists === true && !unlocked, [vaultExists, unlocked])
   const shouldCenter = useMemo(() => showLoading || showSetup || showUnlock, [showLoading, showSetup, showUnlock])
+
+  useEffect(() => {
+    if (showUnlock && unlockPasswordRef.current) {
+      unlockPasswordRef.current.focus()
+      return
+    }
+
+    if (showSetup && setupPasswordRef.current) {
+      setupPasswordRef.current.focus()
+    }
+  }, [showSetup, showUnlock])
 
   useEffect(() => {
     if (!dialogState) {
@@ -620,6 +633,7 @@ export default function Home() {
                     id="master"
                     type="password"
                     autoComplete="new-password"
+                    ref={setupPasswordRef}
                     value={setupPassword}
                     onChange={(event) => setSetupPassword(event.target.value)}
                     required
@@ -658,6 +672,7 @@ export default function Home() {
                     id="unlock"
                     type="password"
                     autoComplete="current-password"
+                    ref={unlockPasswordRef}
                     value={loginPassword}
                     onChange={(event) => setLoginPassword(event.target.value)}
                     required
