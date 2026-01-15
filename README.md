@@ -25,34 +25,29 @@ Open [http://localhost:3000](http://localhost:3000) to access the vault.
 - 💾 Store passwords, credit cards, and identity information
 - 🚀 Optimized for performance (memoization, transitions, image optimization)
 - 📱 Responsive design with modern UI
-- 🔄 Vercel Blob storage for production deployments
+- 📦 Static export ready for CDN hosting (Cloudflare Pages + D1)
 
 ## Security
 
 - All encryption/decryption happens in-browser using Web Crypto API
 - Master password never leaves your device
-- API routes only handle encrypted payloads
+- Encrypted vault is stored in Cloudflare D1
 - Uses PBKDF2 (310k iterations) + AES-GCM-256
 - Integrity tags prevent tampering
 
 ## Local Development
 
-Encrypted vault is stored in `data/vault.json` during development.
+The UI runs with `bun run dev`, but vault storage depends on Cloudflare Pages
+Functions + D1. Deploy to Pages to exercise the storage API.
 
-## Production Deployment
+## Cloudflare Pages Deployment
 
-### Vercel Blob Setup
-
-1. Enable **Vercel Blob** in project dashboard
-2. Add `BLOB_READ_WRITE_TOKEN` to environment variables
-3. Optional: Set `VAULT_BLOB_PREFIX` for custom storage path
-4. Deploy and initialize vault via UI
-
-### Environment Variables
-
-- `BLOB_READ_WRITE_TOKEN` - Required for production Vercel Blob storage
-- `VAULT_BLOB_PREFIX` - Optional, defaults to `vaults`
-- `VAULT_BLOB_KEY` - Optional, defaults to `vault.json`
+1. Create a D1 database in the Cloudflare dashboard.
+2. Run the SQL in `migrations/0001_create_vaults.sql` in the D1 console.
+3. Bind the D1 database to your Pages project as `DB`.
+4. Build the site with `bun run build` (or `npm run build`).
+5. Set the Cloudflare Pages build output directory to `out`.
+6. Deploy the static site (Functions are auto-detected from `functions/`).
 
 ## Performance Optimizations
 
