@@ -199,6 +199,19 @@ async function saveVault(payload: VaultPayload) {
   });
 }
 
+async function ensureVaultInitialized() {
+  const status = await requestJson<{ exists: boolean } | null>(
+    "/api/vault/status",
+  );
+  if (!status || typeof status.exists !== "boolean") {
+    throw new Error("Unable to read vault status.");
+  }
+  if (!status.exists) {
+    const freshVault = createVaultDefault();
+    await initVault(freshVault);
+  }
+}
+
 export default function App() {
   const hasPassword = Boolean(readPasswordMeta());
   const [view, setView] = createSignal<"setup" | "locked" | "unlocked">(
@@ -312,6 +325,7 @@ export default function App() {
         return;
       }
 
+      await ensureVaultInitialized();
       const remoteVault = await loadVault();
       setVault(remoteVault);
       setSyncEnabled(true);
