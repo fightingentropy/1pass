@@ -32,3 +32,11 @@ export function getDb(env: Env) {
 
   return env.DB;
 }
+
+export async function ensureVaultTable(db: Env["DB"]) {
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS vaults (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+    )
+    .run();
+}

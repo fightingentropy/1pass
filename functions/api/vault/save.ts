@@ -1,7 +1,19 @@
-import { DEFAULT_VAULT_ID, errorResponse, getDb, jsonResponse } from "./shared";
+import {
+  DEFAULT_VAULT_ID,
+  ensureVaultTable,
+  errorResponse,
+  getDb,
+  jsonResponse,
+} from "./shared";
 import type { Env } from "./shared";
 
-export async function onRequestPost({ request, env }: { request: Request; env: Env }) {
+export async function onRequestPost({
+  request,
+  env,
+}: {
+  request: Request;
+  env: Env;
+}) {
   try {
     const body = await request.json().catch(() => null);
     if (!body || typeof body.payload !== "object" || body.payload === null) {
@@ -9,6 +21,7 @@ export async function onRequestPost({ request, env }: { request: Request; env: E
     }
 
     const db = getDb(env);
+    await ensureVaultTable(db);
     const existing = await db
       .prepare("SELECT id FROM vaults WHERE id = ?1")
       .bind(DEFAULT_VAULT_ID)
