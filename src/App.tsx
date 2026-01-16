@@ -9,8 +9,6 @@ import "./app.css";
 const STORAGE_KEYS = {
   passwordHash: "vault.password.hash",
   passwordSalt: "vault.password.salt",
-  payload: "vault.payload",
-  updatedAt: "vault.updated.at",
 };
 
 type IdentityDraft = {
@@ -152,19 +150,53 @@ function readPasswordMeta() {
   return { hash, salt };
 }
 
-function loadVaultData() {
-  const stored = localStorage.getItem(STORAGE_KEYS.payload);
-  if (!stored) return createVaultDefault();
-  try {
-    return normalizeVault(JSON.parse(stored));
-  } catch {
-    return createVaultDefault();
+async function requestJson<T>(path: string, init?: RequestInit) {
+  const response = await fetch(path, {
+    ...init,
+    headers: {
+      "content-type": "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+
+  const text = await response.text();
+  let data = null as T;
+  if (text) {
+    try {
+      data = JSON.parse(text) as T;
+    } catch {
+      data = null as T;
+    }
   }
+
+  if (!response.ok) {
+    const message =
+      typeof (data as { error?: string } | null)?.error === "string"
+        ? (data as { error: string }).error
+        : `Request failed (${response.status})`;
+    throw new Error(message);
+  }
+
+  return data;
 }
 
-function readUpdatedAt() {
-  const value = localStorage.getItem(STORAGE_KEYS.updatedAt);
-  return value ? Number(value) : null;
+async function initVault(payload: VaultPayload) {
+  await requestJson("/api/vault/init", {
+    method: "POST",
+    body: JSON.stringify({ payload }),
+  });
+}
+
+async function loadVault() {
+  const data = await requestJson<{ payload: unknown }>("/api/vault/load");
+  return normalizeVault(data.payload);
+}
+
+async function saveVault(payload: VaultPayload) {
+  await requestJson("/api/vault/save", {
+    method: "POST",
+    body: JSON.stringify({ payload }),
+  });
 }
 
 export default function App() {
@@ -176,14 +208,13 @@ export default function App() {
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
-  const [lastSaved, setLastSaved] = createSignal<number | null>(
-    readUpdatedAt(),
-  );
+  const [lastSaved, setLastSaved] = createSignal<number | null>(null);
   const [query, setQuery] = createSignal("");
   const [selectedId, setSelectedId] = createSignal("");
   const [isModalOpen, setIsModalOpen] = createSignal(false);
   const [draft, setDraft] = createSignal<IdentityDraft>(createIdentityDraft());
   const [modalError, setModalError] = createSignal("");
+  const [syncEnabled, setSyncEnabled] = createSignal(false);
 
   const filteredIdentities = createMemo(() => {
     const term = query().trim().toLowerCase();
@@ -211,11 +242,10 @@ export default function App() {
   });
 
   createEffect(() => {
-    if (view() !== "unlocked") return;
+    if (view() !== "unlocked" || !syncEnabled()) return;
     const payload = vault();
-    localStorage.setItem(STORAGE_KEYS.payload, JSON.stringify(payload));
+    void saveVault(payload);
     const now = Date.now();
-    localStorage.setItem(STORAGE_KEYS.updatedAt, String(now));
     setLastSaved(now);
   });
 
@@ -247,13 +277,18 @@ export default function App() {
       localStorage.setItem(STORAGE_KEYS.passwordSalt, salt);
       localStorage.setItem(STORAGE_KEYS.passwordHash, hash);
       const freshVault = createVaultDefault();
+      await initVault(freshVault);
       setVault(freshVault);
-      localStorage.setItem(STORAGE_KEYS.payload, JSON.stringify(freshVault));
+      setSyncEnabled(true);
       setView("unlocked");
       setPassword("");
     } catch (setupError) {
       console.error(setupError);
-      setError("Unable to initialize the vault. Try again.");
+      setError(
+        setupError instanceof Error
+          ? setupError.message
+          : "Unable to initialize the vault. Try again.",
+      );
     } finally {
       setBusy(false);
     }
@@ -277,12 +312,18 @@ export default function App() {
         return;
       }
 
-      setVault(loadVaultData());
+      const remoteVault = await loadVault();
+      setVault(remoteVault);
+      setSyncEnabled(true);
       setView("unlocked");
       setPassword("");
     } catch (unlockError) {
       console.error(unlockError);
-      setError("Unable to unlock. Please retry.");
+      setError(
+        unlockError instanceof Error
+          ? unlockError.message
+          : "Unable to unlock. Please retry.",
+      );
     } finally {
       setBusy(false);
     }
@@ -292,6 +333,7 @@ export default function App() {
     setView("locked");
     setPassword("");
     setQuery("");
+    setSyncEnabled(false);
   };
 
   const handleOpenModal = () => {
