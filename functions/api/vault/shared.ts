@@ -1,6 +1,8 @@
 export type Env = {
   DB: {
     prepare: (query: string) => {
+      run: () => Promise<unknown>;
+      first: <T = unknown>() => Promise<T | null>;
       bind: (...args: unknown[]) => {
         first: <T = unknown>() => Promise<T | null>;
         run: () => Promise<unknown>;
