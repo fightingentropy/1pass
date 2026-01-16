@@ -1,6 +1,6 @@
 # 1Pass Vault
 
-A secure, client-side password manager built with Next.js 16, React 19, and Web Crypto API.
+A fast, client-side password manager built with SolidJS, Vite, and the Web Crypto API.
 
 ## Getting Started
 
@@ -9,12 +9,12 @@ bun install
 bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to access the vault.
+Open [http://localhost:5173](http://localhost:5173) to access the vault.
 
 ## Tech Stack
 
-- **Next.js 16 Canary** with Turbopack
-- **React 19** with React Compiler enabled
+- **SolidJS** for fine-grained reactivity
+- **Vite** for instant dev startup
 - **TypeScript 5** with strict mode
 - **Tailwind CSS 4** for styling
 - **Web Crypto API** for encryption (PBKDF2 + AES-GCM)
@@ -23,9 +23,9 @@ Open [http://localhost:3000](http://localhost:3000) to access the vault.
 
 - 🔐 Client-side encryption (master password never leaves your device)
 - 💾 Store passwords, credit cards, and identity information
-- 🚀 Optimized for performance (memoization, transitions, image optimization)
+- 🚀 Snappy UI powered by Solid's fine-grained updates
 - 📱 Responsive design with modern UI
-- 📦 Static export ready for CDN hosting (Cloudflare Pages + D1)
+- 📦 Static output ready for Cloudflare Pages + D1
 
 ## Security
 
@@ -38,7 +38,7 @@ Open [http://localhost:3000](http://localhost:3000) to access the vault.
 ## Local Development
 
 The UI runs with `bun run dev`, but vault storage depends on Cloudflare Pages
-Functions + D1. Deploy to Pages to exercise the storage API.
+Functions + D1. Use a deployed Pages project to exercise the storage API.
 
 ## Cloudflare Pages Deployment
 
@@ -46,14 +46,13 @@ Functions + D1. Deploy to Pages to exercise the storage API.
 2. Run the SQL in `migrations/0001_create_vaults.sql` in the D1 console.
 3. Bind the D1 database to your Pages project as `DB`.
 4. Build the site with `bun run build` (or `npm run build`).
-5. Set the Cloudflare Pages build output directory to `out`.
-6. Deploy the static site (Functions are auto-detected from `functions/`).
+5. Set the Cloudflare Pages build output directory to `dist`.
+6. Ensure the SPA redirect from `public/_redirects` ships with the build.
+7. Deploy the static site (Functions are auto-detected from `functions/`).
 
 ## Performance Optimizations
 
-- React Compiler for automatic optimizations
-- Memoized components and callbacks
-- React transitions for smooth interactions
-- Turbopack for fast builds (~2.4s)
-- Modern image formats (AVIF, WebP)
+- Solid's fine-grained reactivity keeps updates minimal
+- Vite build output optimized for CDN delivery
+- Service worker caches the shell for quick loads
 - Optimized crypto operations with caching

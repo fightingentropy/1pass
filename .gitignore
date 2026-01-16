@@ -2,8 +2,7 @@
 node_modules/
 
 # Production
-.next/
-out/
+dist/
 
 # Logs
 npm-debug.log*
@@ -18,5 +17,3 @@ yarn-error.log*
 .DS_Store
 *.swp
 *.swo
-
-node_modules
