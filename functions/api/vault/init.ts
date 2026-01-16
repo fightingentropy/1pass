@@ -4,8 +4,13 @@ import {
   errorResponse,
   getDb,
   jsonResponse,
+  optionsResponse,
 } from "./shared";
 import type { Env } from "./shared";
+
+export function onRequestOptions() {
+  return optionsResponse();
+}
 
 export async function onRequestPost({
   request,

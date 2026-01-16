@@ -12,12 +12,18 @@ export type Env = {
 };
 
 export const DEFAULT_VAULT_ID = "default";
+export const CORS_HEADERS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET,POST,OPTIONS",
+  "access-control-allow-headers": "content-type",
+};
 
 export function jsonResponse(data: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), {
     ...init,
     headers: {
       "content-type": "application/json",
+      ...CORS_HEADERS,
       ...(init.headers ?? {}),
     },
   });
@@ -25,6 +31,10 @@ export function jsonResponse(data: unknown, init: ResponseInit = {}) {
 
 export function errorResponse(message: string, status = 400) {
   return jsonResponse({ error: message }, { status });
+}
+
+export function optionsResponse() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
 export function getDb(env: Env) {

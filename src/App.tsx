@@ -150,8 +150,13 @@ function readPasswordMeta() {
   return { hash, salt };
 }
 
+const apiBase = (import.meta.env.VITE_API_BASE as string | undefined)
+  ?.trim()
+  .replace(/\/+$/, "");
+
 async function requestJson<T>(path: string, init?: RequestInit) {
-  const response = await fetch(path, {
+  const url = apiBase ? `${apiBase}${path}` : path;
+  const response = await fetch(url, {
     ...init,
     headers: {
       "content-type": "application/json",
