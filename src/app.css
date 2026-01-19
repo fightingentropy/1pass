@@ -81,6 +81,18 @@ body::after {
     gap: 4px;
 }
 
+.brand-row {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+}
+
+.brand-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
 .brand-mark {
     font-size: 26px;
     letter-spacing: 0.02em;
@@ -161,8 +173,8 @@ body::after {
     height: 52px;
     border-radius: 16px;
     border: 1px solid var(--border);
-    background: #0f0f10;
-    box-shadow: 0 10px 20px rgba(9, 9, 11, 0.08);
+    background: url("/logo.svg") center/cover no-repeat;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.35);
 }
 
 .gate-card h1 {

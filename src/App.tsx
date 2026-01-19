@@ -402,9 +402,12 @@ export default function App() {
       <div class="shell">
         <Show when={view() === "unlocked"}>
           <header class="topbar">
-            <div class="brand">
-              <span class="brand-mark">1Pass</span>
-              <span class="brand-subtitle">Personal Vault</span>
+            <div class="brand brand-row">
+              <span class="brand-logo" aria-hidden="true" />
+              <div class="brand-text">
+                <span class="brand-mark">1Pass</span>
+                <span class="brand-subtitle">Personal Vault</span>
+              </div>
             </div>
             <div class="topbar-actions">
               <span class="status-pill">Unlocked</span>
