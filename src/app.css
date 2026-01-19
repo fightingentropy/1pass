@@ -1,17 +1,16 @@
 :root {
     color-scheme: dark;
-    --bg-light: #0a0a0a;
-    --bg-mid: #070707;
-    --bg-dark: #040404;
-    --ink: #f5f5f5;
-    --muted: #b3b3b3;
-    --accent: #f5f5f5;
-    --accent-strong: #ffffff;
-    --accent-2: #cfcfcf;
-    --glass: rgba(255, 255, 255, 0.04);
-    --glass-strong: rgba(255, 255, 255, 0.08);
-    --line: rgba(255, 255, 255, 0.16);
-    --shadow: 0 30px 60px rgba(0, 0, 0, 0.45);
+    --background: #050505;
+    --foreground: #f4f4f5;
+    --card: #0a0a0a;
+    --muted: #a1a1aa;
+    --muted-foreground: #d4d4d8;
+    --border: #27272a;
+    --input: #27272a;
+    --ring: #f4f4f5;
+    --accent: #f4f4f5;
+    --accent-foreground: #09090b;
+    --shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
 }
 
 *,
@@ -23,9 +22,9 @@
 body {
     margin: 0;
     min-height: 100vh;
-    font-family: "Space Grotesk", sans-serif;
-    color: var(--ink);
-    background: #000;
+    font-family: "Geist", sans-serif;
+    color: var(--foreground);
+    background: var(--background);
 }
 
 body::before,
@@ -49,29 +48,6 @@ body::after {
     min-height: 100vh;
 }
 
-@keyframes rise {
-    from {
-        opacity: 0;
-        transform: translateY(16px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes float {
-    0% {
-        transform: translateY(0);
-    }
-    50% {
-        transform: translateY(-6px);
-    }
-    100% {
-        transform: translateY(0);
-    }
-}
-
 .app {
     min-height: 100vh;
     padding: clamp(20px, 4vw, 48px);
@@ -83,7 +59,6 @@ body::after {
     display: flex;
     flex-direction: column;
     gap: 32px;
-    animation: rise 0.6s ease both;
 }
 
 .app[data-view="locked"] .shell,
@@ -107,7 +82,6 @@ body::after {
 }
 
 .brand-mark {
-    font-family: "Fraunces", serif;
     font-size: 26px;
     letter-spacing: 0.02em;
 }
@@ -124,23 +98,24 @@ body::after {
     border-radius: 999px;
     font-weight: 600;
     font-size: 13px;
-    background: rgba(0, 0, 0, 0.08);
+    background: #18181b;
+    color: var(--foreground);
 }
 
 .status-chip.unlocked {
-    background: rgba(26, 163, 163, 0.18);
-    color: #0a5353;
+    background: #064e3b;
+    color: #a7f3d0;
 }
 
 .status-chip[data-state="unlocked"] {
-    background: rgba(0, 0, 0, 0.14);
-    color: #0f0f0f;
+    background: #1f1f23;
+    color: var(--foreground);
 }
 
 .status-chip[data-state="locked"],
 .status-chip[data-state="setup"] {
-    background: rgba(0, 0, 0, 0.12);
-    color: #1a1a1a;
+    background: #0f0f10;
+    color: var(--muted-foreground);
 }
 
 .gate {
@@ -158,14 +133,12 @@ body::after {
 .gate-card {
     padding: 32px;
     border-radius: 26px;
-    background: var(--glass-strong);
+    background: var(--card);
     box-shadow: var(--shadow);
-    border: 1px solid rgba(255, 255, 255, 0.6);
-    backdrop-filter: blur(18px);
+    border: 1px solid var(--border);
     display: flex;
     flex-direction: column;
     gap: 20px;
-    animation: rise 0.6s ease both;
 }
 
 .gate-card.minimal {
@@ -187,22 +160,19 @@ body::after {
     width: 52px;
     height: 52px;
     border-radius: 16px;
-    border: 1px solid rgba(0, 0, 0, 0.18);
-    background: rgba(255, 255, 255, 0.08);
-    box-shadow:
-        inset 0 0 0 1px rgba(255, 255, 255, 0.6),
-        0 12px 30px rgba(0, 0, 0, 0.1);
+    border: 1px solid var(--border);
+    background: #0f0f10;
+    box-shadow: 0 10px 20px rgba(9, 9, 11, 0.08);
 }
 
 .gate-card h1 {
-    font-family: "Fraunces", serif;
     font-size: clamp(26px, 4vw, 38px);
     margin: 0;
 }
 
 .gate-card .subtitle {
     margin: 0;
-    color: var(--muted);
+    color: var(--muted-foreground);
     line-height: 1.5;
 }
 
@@ -210,8 +180,8 @@ body::after {
     align-self: flex-start;
     padding: 6px 12px;
     border-radius: 999px;
-    background: rgba(255, 122, 89, 0.16);
-    color: #8f2a18;
+    background: #3f0d0d;
+    color: #fca5a5;
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.2em;
@@ -236,8 +206,6 @@ body::after {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    animation: rise 0.5s ease both;
-    animation-delay: calc(var(--stagger, 0) * 0.08s);
 }
 
 .field-label {
@@ -245,19 +213,18 @@ body::after {
     font-size: 13px;
     text-transform: uppercase;
     letter-spacing: 0.16em;
+    color: var(--muted);
 }
 
 .field input,
 .field textarea {
     border-radius: 14px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--input);
     padding: 12px 14px;
     font-size: 15px;
     font-family: inherit;
-    background: rgba(255, 255, 255, 0.65);
-    transition:
-        border-color 0.2s ease,
-        box-shadow 0.2s ease;
+    background: #0f0f10;
+    color: var(--foreground);
 }
 
 .field textarea {
@@ -267,8 +234,8 @@ body::after {
 .field input:focus,
 .field textarea:focus {
     outline: none;
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.12);
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px rgba(9, 9, 11, 0.1);
 }
 
 .field-hint {
@@ -279,8 +246,8 @@ body::after {
 .form-error {
     padding: 10px 12px;
     border-radius: 12px;
-    background: rgba(0, 0, 0, 0.08);
-    color: var(--ink);
+    background: #3f0d0d;
+    color: #fca5a5;
     font-weight: 600;
 }
 
@@ -292,25 +259,18 @@ body::after {
     font-size: 15px;
     cursor: pointer;
     font-family: inherit;
-    transition:
-        transform 0.2s ease,
-        box-shadow 0.2s ease;
 }
 
 .btn.primary {
-    background: #f5f5f5;
-    color: #050505;
-    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
-}
-
-.btn.primary:hover {
-    transform: translateY(-1px);
+    background: var(--accent);
+    color: var(--accent-foreground);
+    box-shadow: 0 12px 24px rgba(9, 9, 11, 0.16);
 }
 
 .btn.ghost {
     background: transparent;
-    border: 1px solid var(--line);
-    color: var(--ink);
+    border: 1px solid var(--border);
+    color: var(--foreground);
 }
 
 .sr-only {
@@ -350,34 +310,25 @@ body::after {
 .panel-card {
     padding: 24px;
     border-radius: 22px;
-    background: var(--glass);
-    border: 1px solid rgba(255, 255, 255, 0.6);
-    backdrop-filter: blur(14px);
+    background: var(--card);
+    border: 1px solid var(--border);
     box-shadow: var(--shadow);
     display: flex;
     flex-direction: column;
     gap: 18px;
-    animation: rise 0.7s ease both;
-}
-
-.panel-card.float {
-    animation:
-        rise 0.7s ease both,
-        float 7s ease-in-out 1.2s infinite;
 }
 
 .panel-card.accent {
-    background: rgba(255, 255, 255, 0.08);
+    background: #111114;
 }
 
 .panel-card h2 {
     margin: 0;
-    font-family: "Fraunces", serif;
 }
 
 .panel-card p {
     margin: 0;
-    color: var(--muted);
+    color: var(--muted-foreground);
     line-height: 1.5;
 }
 
@@ -432,8 +383,8 @@ body::after {
 .sidebar-card {
     padding: 22px;
     border-radius: 20px;
-    background: var(--glass-strong);
-    border: 1px solid rgba(255, 255, 255, 0.7);
+    background: var(--card);
+    border: 1px solid var(--border);
     box-shadow: var(--shadow);
     display: flex;
     flex-direction: column;
@@ -443,17 +394,16 @@ body::after {
 .sidebar-card h2,
 .sidebar-card h3 {
     margin: 0;
-    font-family: "Fraunces", serif;
 }
 
 .sidebar-card p {
     margin: 0;
-    color: var(--muted);
+    color: var(--muted-foreground);
     line-height: 1.5;
 }
 
 .sidebar-card.soft {
-    background: rgba(255, 255, 255, 0.5);
+    background: #0f0f12;
 }
 
 .progress {
@@ -472,7 +422,7 @@ body::after {
 .progress-bar {
     width: 100%;
     height: 8px;
-    background: rgba(27, 29, 36, 0.12);
+    background: #1f1f23;
     border-radius: 999px;
     overflow: hidden;
 }
@@ -480,8 +430,7 @@ body::after {
 .progress-bar span {
     display: block;
     height: 100%;
-    background: #f5f5f5;
-    transition: width 0.3s ease;
+    background: var(--accent);
 }
 
 .meta {
@@ -494,7 +443,7 @@ body::after {
 
 .meta strong {
     font-size: 14px;
-    color: var(--ink);
+    color: var(--foreground);
 }
 
 .main {
@@ -512,7 +461,6 @@ body::after {
 
 .main-header h1 {
     margin: 0;
-    font-family: "Fraunces", serif;
     font-size: clamp(26px, 4vw, 36px);
 }
 
@@ -541,32 +489,29 @@ body::after {
 .tab {
     padding: 10px 16px;
     border-radius: 999px;
-    border: 1px solid var(--line);
-    background: rgba(255, 255, 255, 0.6);
-    color: var(--ink);
+    border: 1px solid var(--border);
+    background: #111114;
+    color: var(--foreground);
     font-weight: 600;
     cursor: pointer;
-    transition: all 0.2s ease;
 }
 
 .tab.active {
-    background: var(--ink);
-    color: #fff;
-    border-color: var(--ink);
+    background: var(--accent);
+    color: var(--accent-foreground);
+    border-color: var(--accent);
 }
 
 .tab-panel {
     padding: 24px;
     border-radius: 24px;
-    background: var(--glass-strong);
-    border: 1px solid rgba(255, 255, 255, 0.7);
+    background: var(--card);
+    border: 1px solid var(--border);
     box-shadow: var(--shadow);
-    animation: rise 0.5s ease both;
 }
 
 .tab-panel h2 {
     margin: 0 0 8px;
-    font-family: "Fraunces", serif;
 }
 
 .panel-subtitle {
@@ -576,7 +521,7 @@ body::after {
 
 .subtitle {
     margin: 0;
-    color: var(--muted);
+    color: var(--muted-foreground);
     line-height: 1.5;
 }
 
@@ -600,8 +545,8 @@ body::after {
 .status-pill {
     padding: 6px 12px;
     border-radius: 999px;
-    border: 1px solid var(--line);
-    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--border);
+    background: #111114;
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.12em;
@@ -632,9 +577,9 @@ body::after {
     align-items: center;
     padding: 12px 16px;
     border-radius: 14px;
-    border: 1px solid var(--line);
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--ink);
+    border: 1px solid var(--border);
+    background: #111114;
+    color: var(--foreground);
     font-weight: 600;
     cursor: pointer;
 }
@@ -645,8 +590,8 @@ body::after {
 }
 
 .nav-item.active {
-    background: rgba(255, 255, 255, 0.18);
-    border-color: rgba(255, 255, 255, 0.3);
+    background: #1f1f23;
+    border-color: #2f2f34;
 }
 
 .main {
@@ -664,7 +609,6 @@ body::after {
 
 .main-header h1 {
     margin: 0;
-    font-family: "Fraunces", serif;
     font-size: clamp(26px, 4vw, 36px);
 }
 
@@ -678,12 +622,12 @@ body::after {
 
 .search-field input {
     border-radius: 999px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--border);
     padding: 10px 16px;
     min-width: 220px;
-    background: rgba(255, 255, 255, 0.12);
+    background: #0f0f10;
     font-family: inherit;
-    color: var(--ink);
+    color: var(--foreground);
 }
 
 .btn.icon {
@@ -697,9 +641,9 @@ body::after {
 }
 
 .items-list {
-    background: var(--glass-strong);
+    background: var(--card);
     border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.7);
+    border: 1px solid var(--border);
     box-shadow: var(--shadow);
     display: flex;
     flex-direction: column;
@@ -732,8 +676,8 @@ body::after {
     gap: 12px;
     padding: 12px 14px;
     border-radius: 14px;
-    border: 1px solid var(--line);
-    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--border);
+    background: #111114;
     text-align: left;
     cursor: pointer;
 }
@@ -748,14 +692,14 @@ body::after {
 }
 
 .list-item.active {
-    border-color: rgba(255, 255, 255, 0.3);
-    background: rgba(255, 255, 255, 0.18);
+    border-color: #2f2f34;
+    background: #1f1f23;
 }
 
 .pill {
     padding: 4px 10px;
     border-radius: 999px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--border);
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.12em;
@@ -765,8 +709,8 @@ body::after {
 .detail-card {
     padding: 22px;
     border-radius: 22px;
-    background: var(--glass-strong);
-    border: 1px solid rgba(255, 255, 255, 0.7);
+    background: var(--card);
+    border: 1px solid var(--border);
     box-shadow: var(--shadow);
 }
 
@@ -779,7 +723,6 @@ body::after {
 
 .detail-header h2 {
     margin: 0;
-    font-family: "Fraunces", serif;
 }
 
 .detail-grid {
@@ -800,6 +743,7 @@ body::after {
     align-items: center;
     gap: 12px;
     font-size: 13px;
+    color: var(--muted);
 }
 
 .empty,
@@ -812,20 +756,19 @@ body::after {
 .modal-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(12, 12, 12, 0.4);
+    background: rgba(15, 23, 42, 0.18);
     display: flex;
     align-items: center;
     justify-content: center;
     padding: 24px;
     z-index: 10;
-    backdrop-filter: blur(6px);
 }
 
 .modal {
     width: min(640px, 100%);
-    background: var(--glass-strong);
+    background: var(--card);
     border-radius: 24px;
-    border: 1px solid rgba(255, 255, 255, 0.7);
+    border: 1px solid var(--border);
     box-shadow: var(--shadow);
     padding: 24px;
 }
