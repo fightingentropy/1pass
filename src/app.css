@@ -754,6 +754,10 @@ body::after {
     margin: 4px 0 0;
 }
 
+.notes-content {
+    white-space: pre-line;
+}
+
 .detail-footer {
     margin-top: 20px;
     display: flex;

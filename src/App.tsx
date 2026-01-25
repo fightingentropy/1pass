@@ -19,6 +19,7 @@ type IdentityDraft = {
   address: string;
   nino: string;
   nhsNumber: string;
+  passNumber: string;
   notes: string;
 };
 
@@ -42,6 +43,7 @@ function createIdentityDraft(): IdentityDraft {
     address: "",
     nino: "",
     nhsNumber: "",
+    passNumber: "",
     notes: "",
   };
 }
@@ -59,6 +61,7 @@ function normalizeIdentityItem(
     address: typeof raw.address === "string" ? raw.address : "",
     nino: typeof raw.nino === "string" ? raw.nino : "",
     nhsNumber: typeof raw.nhsNumber === "string" ? raw.nhsNumber : "",
+    passNumber: typeof raw.passNumber === "string" ? raw.passNumber : "",
     notes: typeof raw.notes === "string" ? raw.notes : "",
     createdAt: typeof raw.createdAt === "number" ? raw.createdAt : now,
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
@@ -256,6 +259,7 @@ export default function App() {
         item.address,
         item.nino,
         item.nhsNumber,
+        item.passNumber,
         item.notes,
       ]
         .join(" ")
@@ -382,6 +386,7 @@ export default function App() {
       address: identity.address,
       nino: identity.nino,
       nhsNumber: identity.nhsNumber,
+      passNumber: identity.passNumber,
       notes: identity.notes,
     });
     setEditingId(identity.id);
@@ -413,6 +418,7 @@ export default function App() {
     const nextAddress = current.address.trim();
     const nextNino = current.nino.trim();
     const nextNhsNumber = current.nhsNumber.trim();
+    const nextPassNumber = current.passNumber.trim();
     const nextNotes = current.notes.trim();
     const activeEditingId = editingId();
 
@@ -430,6 +436,7 @@ export default function App() {
                 address: nextAddress,
                 nino: nextNino,
                 nhsNumber: nextNhsNumber,
+                passNumber: nextPassNumber,
                 notes: nextNotes,
                 updatedAt: now,
               }
@@ -447,6 +454,7 @@ export default function App() {
         address: nextAddress,
         nino: nextNino,
         nhsNumber: nextNhsNumber,
+        passNumber: nextPassNumber,
         notes: nextNotes,
         createdAt: now,
         updatedAt: now,
@@ -698,8 +706,16 @@ export default function App() {
                             </p>
                           </div>
                           <div>
-                            <span class="meta-label">Notes</span>
+                            <span class="meta-label">Pass No</span>
                             <p>
+                              {identity().passNumber.trim().length > 0
+                                ? identity().passNumber
+                                : "Not provided"}
+                            </p>
+                          </div>
+                          <div>
+                            <span class="meta-label">Notes</span>
+                            <p class="notes-content">
                               {identity().notes.trim().length > 0
                                 ? identity().notes
                                 : "Not provided"}
@@ -835,6 +851,19 @@ export default function App() {
                       setDraft((current) => ({
                         ...current,
                         nhsNumber: event.currentTarget.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Pass No</span>
+                  <input
+                    type="text"
+                    value={draft().passNumber}
+                    onInput={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        passNumber: event.currentTarget.value,
                       }))
                     }
                   />
