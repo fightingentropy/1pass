@@ -733,6 +733,12 @@ body::after {
     gap: 16px;
 }
 
+.detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
 .detail-header h2 {
     margin: 0;
 }
@@ -821,6 +827,23 @@ body::after {
     color: var(--muted);
     font-weight: 600;
     cursor: pointer;
+}
+
+.icon-button.icon-only {
+    width: 36px;
+    height: 36px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #111114;
+    color: var(--foreground);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.icon-button.icon-only svg {
+    width: 16px;
+    height: 16px;
 }
 
 @media (max-width: 980px) {

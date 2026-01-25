@@ -17,6 +17,8 @@ type IdentityDraft = {
   email: string;
   phone: string;
   address: string;
+  nino: string;
+  nhsNumber: string;
   notes: string;
 };
 
@@ -38,6 +40,8 @@ function createIdentityDraft(): IdentityDraft {
     email: "",
     phone: "",
     address: "",
+    nino: "",
+    nhsNumber: "",
     notes: "",
   };
 }
@@ -53,6 +57,8 @@ function normalizeIdentityItem(
     email: typeof raw.email === "string" ? raw.email : "",
     phone: typeof raw.phone === "string" ? raw.phone : "",
     address: typeof raw.address === "string" ? raw.address : "",
+    nino: typeof raw.nino === "string" ? raw.nino : "",
+    nhsNumber: typeof raw.nhsNumber === "string" ? raw.nhsNumber : "",
     notes: typeof raw.notes === "string" ? raw.notes : "",
     createdAt: typeof raw.createdAt === "number" ? raw.createdAt : now,
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
@@ -233,6 +239,9 @@ export default function App() {
   const [draft, setDraft] = createSignal<IdentityDraft>(createIdentityDraft());
   const [modalError, setModalError] = createSignal("");
   const [syncEnabled, setSyncEnabled] = createSignal(false);
+  const [editingId, setEditingId] = createSignal<string | null>(null);
+
+  const isEditing = createMemo(() => editingId() !== null);
 
   const filteredIdentities = createMemo(() => {
     const term = query().trim().toLowerCase();
@@ -245,6 +254,8 @@ export default function App() {
         item.email,
         item.phone,
         item.address,
+        item.nino,
+        item.nhsNumber,
         item.notes,
       ]
         .join(" ")
@@ -357,6 +368,23 @@ export default function App() {
 
   const handleOpenModal = () => {
     setDraft(createIdentityDraft());
+    setEditingId(null);
+    setModalError("");
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditModal = (identity: VaultIdentityItem) => {
+    setDraft({
+      firstName: identity.firstName,
+      lastName: identity.lastName,
+      email: identity.email,
+      phone: identity.phone,
+      address: identity.address,
+      nino: identity.nino,
+      nhsNumber: identity.nhsNumber,
+      notes: identity.notes,
+    });
+    setEditingId(identity.id);
     setModalError("");
     setIsModalOpen(true);
   };
@@ -364,9 +392,10 @@ export default function App() {
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setModalError("");
+    setEditingId(null);
   };
 
-  const handleCreateIdentity = (event: Event) => {
+  const handleSaveIdentity = (event: Event) => {
     event.preventDefault();
     setModalError("");
 
@@ -377,24 +406,61 @@ export default function App() {
     }
 
     const now = Date.now();
-    const identity: VaultIdentityItem = {
-      id: createId(),
-      firstName: current.firstName.trim(),
-      lastName: current.lastName.trim(),
-      email: current.email.trim(),
-      phone: current.phone.trim(),
-      address: current.address.trim(),
-      notes: current.notes.trim(),
-      createdAt: now,
-      updatedAt: now,
-    };
+    const nextFirstName = current.firstName.trim();
+    const nextLastName = current.lastName.trim();
+    const nextEmail = current.email.trim();
+    const nextPhone = current.phone.trim();
+    const nextAddress = current.address.trim();
+    const nextNino = current.nino.trim();
+    const nextNhsNumber = current.nhsNumber.trim();
+    const nextNotes = current.notes.trim();
+    const activeEditingId = editingId();
 
-    setVault((currentVault) => ({
-      ...currentVault,
-      identities: [identity, ...currentVault.identities],
-    }));
-    setSelectedId(identity.id);
+    if (activeEditingId) {
+      setVault((currentVault) => ({
+        ...currentVault,
+        identities: currentVault.identities.map((item) =>
+          item.id === activeEditingId
+            ? {
+                ...item,
+                firstName: nextFirstName,
+                lastName: nextLastName,
+                email: nextEmail,
+                phone: nextPhone,
+                address: nextAddress,
+                nino: nextNino,
+                nhsNumber: nextNhsNumber,
+                notes: nextNotes,
+                updatedAt: now,
+              }
+            : item,
+        ),
+      }));
+      setSelectedId(activeEditingId);
+    } else {
+      const identity: VaultIdentityItem = {
+        id: createId(),
+        firstName: nextFirstName,
+        lastName: nextLastName,
+        email: nextEmail,
+        phone: nextPhone,
+        address: nextAddress,
+        nino: nextNino,
+        nhsNumber: nextNhsNumber,
+        notes: nextNotes,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      setVault((currentVault) => ({
+        ...currentVault,
+        identities: [identity, ...currentVault.identities],
+      }));
+      setSelectedId(identity.id);
+    }
+
     setIsModalOpen(false);
+    setEditingId(null);
   };
 
   return (
@@ -567,7 +633,28 @@ export default function App() {
                             </h2>
                             <p class="muted">Identity record</p>
                           </div>
-                          <span class="pill">Private</span>
+                          <div class="detail-actions">
+                            <span class="pill">Private</span>
+                            <button
+                              class="icon-button icon-only"
+                              type="button"
+                              aria-label="Edit identity"
+                              onClick={() =>
+                                handleOpenEditModal(identity())
+                              }
+                            >
+                              <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path
+                                  d="M16.862 4.487a1.5 1.5 0 0 1 2.121 2.122l-9.9 9.9-3.36.39.39-3.36 9.9-9.9Zm-12.6 14.4h15.3"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  stroke-width="1.6"
+                                />
+                              </svg>
+                            </button>
+                          </div>
                         </div>
                         <div class="detail-grid">
                           <div>
@@ -591,6 +678,22 @@ export default function App() {
                             <p>
                               {identity().address.trim().length > 0
                                 ? identity().address
+                                : "Not provided"}
+                            </p>
+                          </div>
+                          <div>
+                            <span class="meta-label">NINO</span>
+                            <p>
+                              {identity().nino.trim().length > 0
+                                ? identity().nino
+                                : "Not provided"}
+                            </p>
+                          </div>
+                          <div>
+                            <span class="meta-label">NHS Number</span>
+                            <p>
+                              {identity().nhsNumber.trim().length > 0
+                                ? identity().nhsNumber
                                 : "Not provided"}
                             </p>
                           </div>
@@ -624,8 +727,10 @@ export default function App() {
           <div class="modal" onClick={(event) => event.stopPropagation()}>
             <div class="modal-header">
               <div>
-                <p class="eyebrow">New identity</p>
-                <h2>Create identity</h2>
+                <p class="eyebrow">
+                  {isEditing() ? "Edit identity" : "New identity"}
+                </p>
+                <h2>{isEditing() ? "Edit identity" : "Create identity"}</h2>
                 <p class="muted">
                   First name and last name are required. Everything else is
                   optional.
@@ -639,7 +744,7 @@ export default function App() {
                 Close
               </button>
             </div>
-            <form class="modal-form" onSubmit={handleCreateIdentity}>
+            <form class="modal-form" onSubmit={handleSaveIdentity}>
               <div class="modal-grid">
                 <label class="field">
                   <span class="field-label">First name</span>
@@ -708,6 +813,32 @@ export default function App() {
                     }
                   />
                 </label>
+                <label class="field">
+                  <span class="field-label">NINO</span>
+                  <input
+                    type="text"
+                    value={draft().nino}
+                    onInput={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        nino: event.currentTarget.value,
+                      }))
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">NHS Number</span>
+                  <input
+                    type="text"
+                    value={draft().nhsNumber}
+                    onInput={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        nhsNumber: event.currentTarget.value,
+                      }))
+                    }
+                  />
+                </label>
                 <label class="field full">
                   <span class="field-label">Notes</span>
                   <textarea
@@ -734,7 +865,7 @@ export default function App() {
                   Cancel
                 </button>
                 <button class="btn primary" type="submit">
-                  Save identity
+                  {isEditing() ? "Save changes" : "Save identity"}
                 </button>
               </div>
             </form>

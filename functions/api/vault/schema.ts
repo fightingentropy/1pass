@@ -5,6 +5,8 @@ export type VaultIdentityItem = {
   email: string;
   phone: string;
   address: string;
+  nino: string;
+  nhsNumber: string;
   notes: string;
   createdAt: number;
   updatedAt: number;
