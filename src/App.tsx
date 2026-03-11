@@ -1,15 +1,33 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onMount,
+  Show,
+} from "solid-js";
 import {
   DEFAULT_VAULT_PAYLOAD,
+  isVaultEncryptedPayload,
+  type VaultEncryptedPayload,
   type VaultIdentityItem,
   type VaultPayload,
 } from "../functions/api/vault/schema";
 import "./app.css";
+import {
+  createVaultSession,
+  decryptVaultPayload,
+  encryptVaultPayload,
+  restoreVaultSession,
+  type VaultSession,
+} from "./vaultCrypto";
 
-const STORAGE_KEYS = {
+const LEGACY_STORAGE_KEYS = {
   passwordHash: "vault.password.hash",
   passwordSalt: "vault.password.salt",
 };
+
+type GateView = "loading" | "setup" | "locked" | "unlocked";
 
 type IdentityDraft = {
   firstName: string;
@@ -122,6 +140,9 @@ function normalizeVault(payload: unknown): VaultPayload {
           typeof partial.profile?.primaryAddress === "string"
             ? partial.profile.primaryAddress
             : "",
+        nino: "",
+        nhsNumber: "",
+        passNumber: "",
         notes: "",
         createdAt: now,
         updatedAt: now,
@@ -134,29 +155,24 @@ function formatTimestamp(value: number) {
   return new Date(value).toLocaleString();
 }
 
-function toHex(buffer: ArrayBuffer) {
-  return Array.from(new Uint8Array(buffer))
+async function hashLegacyPassword(password: string, salt: string) {
+  const encoded = new TextEncoder().encode(`${salt}:${password}`);
+  const digest = await crypto.subtle.digest("SHA-256", encoded);
+  return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 }
 
-function createSalt() {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return toHex(bytes.buffer);
-}
-
-async function hashPassword(password: string, salt: string) {
-  const encoded = new TextEncoder().encode(`${salt}:${password}`);
-  const digest = await crypto.subtle.digest("SHA-256", encoded);
-  return toHex(digest);
-}
-
-function readPasswordMeta() {
-  const hash = localStorage.getItem(STORAGE_KEYS.passwordHash);
-  const salt = localStorage.getItem(STORAGE_KEYS.passwordSalt);
+function readLegacyPasswordMeta() {
+  const hash = localStorage.getItem(LEGACY_STORAGE_KEYS.passwordHash);
+  const salt = localStorage.getItem(LEGACY_STORAGE_KEYS.passwordSalt);
   if (!hash || !salt) return null;
   return { hash, salt };
+}
+
+function clearLegacyPasswordMeta() {
+  localStorage.removeItem(LEGACY_STORAGE_KEYS.passwordHash);
+  localStorage.removeItem(LEGACY_STORAGE_KEYS.passwordSalt);
 }
 
 const apiBase = (import.meta.env.VITE_API_BASE as string | undefined)
@@ -194,43 +210,68 @@ async function requestJson<T>(path: string, init?: RequestInit) {
   return data;
 }
 
-async function initVault(payload: VaultPayload) {
+async function initVault(payload: VaultEncryptedPayload) {
   await requestJson("/api/vault/init", {
     method: "POST",
     body: JSON.stringify({ payload }),
   });
 }
 
-async function loadVault() {
+async function loadVaultRecord() {
   const data = await requestJson<{ payload: unknown }>("/api/vault/load");
-  return normalizeVault(data.payload);
+  return data.payload;
 }
 
-async function saveVault(payload: VaultPayload) {
+async function saveVaultRecord(payload: VaultEncryptedPayload) {
   await requestJson("/api/vault/save", {
     method: "POST",
     body: JSON.stringify({ payload }),
   });
 }
 
-async function ensureVaultInitialized() {
+async function readVaultStatus() {
   const status = await requestJson<{ exists: boolean } | null>(
     "/api/vault/status",
   );
   if (!status || typeof status.exists !== "boolean") {
     throw new Error("Unable to read vault status.");
   }
-  if (!status.exists) {
-    const freshVault = createVaultDefault();
-    await initVault(freshVault);
+  return status;
+}
+
+async function unlockVaultWithPassword(password: string) {
+  const storedPayload = await loadVaultRecord();
+
+  if (isVaultEncryptedPayload(storedPayload)) {
+    const session = await restoreVaultSession(password, storedPayload);
+
+    try {
+      const decryptedPayload = await decryptVaultPayload(storedPayload, session);
+      return { session, vault: normalizeVault(decryptedPayload), migrated: false };
+    } catch {
+      throw new Error("Incorrect password. Try again.");
+    }
   }
+
+  const legacyMeta = readLegacyPasswordMeta();
+  if (legacyMeta) {
+    const hash = await hashLegacyPassword(password, legacyMeta.salt);
+    if (hash !== legacyMeta.hash) {
+      throw new Error("Incorrect password. Try again.");
+    }
+  }
+
+  const vault = normalizeVault(storedPayload);
+  const session = await createVaultSession(password);
+  const encryptedPayload = await encryptVaultPayload(vault, session);
+  await saveVaultRecord(encryptedPayload);
+  clearLegacyPasswordMeta();
+
+  return { session, vault, migrated: true };
 }
 
 export default function App() {
-  const hasPassword = Boolean(readPasswordMeta());
-  const [view, setView] = createSignal<"setup" | "locked" | "unlocked">(
-    hasPassword ? "locked" : "setup",
-  );
+  const [view, setView] = createSignal<GateView>("loading");
   const [vault, setVault] = createSignal<VaultPayload>(createVaultDefault());
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
@@ -243,8 +284,34 @@ export default function App() {
   const [modalError, setModalError] = createSignal("");
   const [syncEnabled, setSyncEnabled] = createSignal(false);
   const [editingId, setEditingId] = createSignal<string | null>(null);
+  const [session, setSession] = createSignal<VaultSession | null>(null);
+  const [persistedVaultJson, setPersistedVaultJson] = createSignal(
+    JSON.stringify(createVaultDefault()),
+  );
 
   const isEditing = createMemo(() => editingId() !== null);
+
+  onMount(() => {
+    void (async () => {
+      setBusy(true);
+      setError("");
+
+      try {
+        const status = await readVaultStatus();
+        setView(status.exists ? "locked" : "setup");
+      } catch (statusError) {
+        console.error(statusError);
+        setError(
+          statusError instanceof Error
+            ? statusError.message
+            : "Unable to reach the vault service.",
+        );
+        setView("locked");
+      } finally {
+        setBusy(false);
+      }
+    })();
+  });
 
   const filteredIdentities = createMemo(() => {
     const term = query().trim().toLowerCase();
@@ -275,11 +342,28 @@ export default function App() {
   });
 
   createEffect(() => {
-    if (view() !== "unlocked" || !syncEnabled()) return;
-    const payload = vault();
-    void saveVault(payload);
-    const now = Date.now();
-    setLastSaved(now);
+    const currentSession = session();
+    if (view() !== "unlocked" || !syncEnabled() || !currentSession) return;
+
+    const nextVault = vault();
+    const nextVaultJson = JSON.stringify(nextVault);
+    if (nextVaultJson === persistedVaultJson()) return;
+
+    void (async () => {
+      try {
+        const encryptedPayload = await encryptVaultPayload(nextVault, currentSession);
+        await saveVaultRecord(encryptedPayload);
+        setPersistedVaultJson(nextVaultJson);
+        setLastSaved(Date.now());
+      } catch (saveError) {
+        console.error(saveError);
+        setError(
+          saveError instanceof Error
+            ? saveError.message
+            : "Unable to save the encrypted vault.",
+        );
+      }
+    })();
   });
 
   createEffect(() => {
@@ -305,14 +389,16 @@ export default function App() {
 
     setBusy(true);
     try {
-      const salt = createSalt();
-      const hash = await hashPassword(password(), salt);
-      localStorage.setItem(STORAGE_KEYS.passwordSalt, salt);
-      localStorage.setItem(STORAGE_KEYS.passwordHash, hash);
       const freshVault = createVaultDefault();
-      await initVault(freshVault);
+      const nextSession = await createVaultSession(password());
+      const encryptedPayload = await encryptVaultPayload(freshVault, nextSession);
+      await initVault(encryptedPayload);
+      clearLegacyPasswordMeta();
       setVault(freshVault);
+      setSession(nextSession);
+      setPersistedVaultJson(JSON.stringify(freshVault));
       setSyncEnabled(true);
+      setLastSaved(Date.now());
       setView("unlocked");
       setPassword("");
     } catch (setupError) {
@@ -333,22 +419,13 @@ export default function App() {
     setBusy(true);
 
     try {
-      const meta = readPasswordMeta();
-      if (!meta) {
-        setView("setup");
-        return;
-      }
-
-      const hash = await hashPassword(password(), meta.salt);
-      if (hash !== meta.hash) {
-        setError("Incorrect password. Try again.");
-        return;
-      }
-
-      await ensureVaultInitialized();
-      const remoteVault = await loadVault();
+      const { session: nextSession, vault: remoteVault, migrated } =
+        await unlockVaultWithPassword(password());
+      setSession(nextSession);
       setVault(remoteVault);
+      setPersistedVaultJson(JSON.stringify(remoteVault));
       setSyncEnabled(true);
+      setLastSaved(migrated ? Date.now() : null);
       setView("unlocked");
       setPassword("");
     } catch (unlockError) {
@@ -365,9 +442,16 @@ export default function App() {
 
   const handleLock = () => {
     setView("locked");
+    setVault(createVaultDefault());
     setPassword("");
     setQuery("");
     setSyncEnabled(false);
+    setSession(null);
+    setSelectedId("");
+    setLastSaved(null);
+    setPersistedVaultJson(JSON.stringify(createVaultDefault()));
+    setIsModalOpen(false);
+    setEditingId(null);
   };
 
   const handleOpenModal = () => {
@@ -500,43 +584,55 @@ export default function App() {
                 <span class="brand-mark">1Pass</span>
                 <span class="brand-subtitle">Personal Vault</span>
               </div>
-              <form
-                class="gate-form minimal"
-                onSubmit={(event) => {
-                  if (view() === "setup") {
-                    void handleSetup(event);
-                  } else {
-                    void handleUnlock(event);
-                  }
-                }}
+              <p class="subtitle">
+                {view() === "loading"
+                  ? "Checking vault status..."
+                  : view() === "setup"
+                    ? "Create a master password. Vault data is encrypted in the browser before sync."
+                    : "Enter your master password to decrypt the vault."}
+              </p>
+              <Show
+                when={view() !== "loading"}
+                fallback={<button class="btn primary" type="button" disabled>Loading...</button>}
               >
-                <label class="field">
-                  <span class="field-label sr-only">Master password</span>
-                  <input
-                    type="password"
-                    autocomplete={
-                      view() === "setup" ? "new-password" : "current-password"
+                <form
+                  class="gate-form minimal"
+                  onSubmit={(event) => {
+                    if (view() === "setup") {
+                      void handleSetup(event);
+                    } else {
+                      void handleUnlock(event);
                     }
-                    placeholder={
-                      view() === "setup"
-                        ? "Create master password"
-                        : "Enter master password"
-                    }
-                    value={password()}
-                    onInput={(event) => setPassword(event.currentTarget.value)}
-                  />
-                </label>
-                <Show when={Boolean(error())}>
-                  <div class="form-error">{error()}</div>
-                </Show>
-                <button class="btn primary" type="submit" disabled={busy()}>
-                  {busy()
-                    ? "Working..."
-                    : view() === "setup"
-                      ? "Create vault"
-                      : "Unlock vault"}
-                </button>
-              </form>
+                  }}
+                >
+                  <label class="field">
+                    <span class="field-label sr-only">Master password</span>
+                    <input
+                      type="password"
+                      autocomplete={
+                        view() === "setup" ? "new-password" : "current-password"
+                      }
+                      placeholder={
+                        view() === "setup"
+                          ? "Create master password"
+                          : "Enter master password"
+                      }
+                      value={password()}
+                      onInput={(event) => setPassword(event.currentTarget.value)}
+                    />
+                  </label>
+                  <Show when={Boolean(error())}>
+                    <div class="form-error">{error()}</div>
+                  </Show>
+                  <button class="btn primary" type="submit" disabled={busy()}>
+                    {busy()
+                      ? "Working..."
+                      : view() === "setup"
+                        ? "Create vault"
+                        : "Unlock vault"}
+                  </button>
+                </form>
+              </Show>
             </div>
           </section>
         </Show>
