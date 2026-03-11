@@ -1011,8 +1011,10 @@ export default function App() {
                               </div>
                               <div class="detail-span">
                                 <span class="meta-label">API Key</span>
-                                <p class="secret-value">
-                                  {item().key.trim() || "Not provided"}
+                                <p class="secret-value masked">
+                                  {item().key.trim()
+                                    ? "Hidden. Press edit to view or update."
+                                    : "Not provided"}
                                 </p>
                               </div>
                               <div class="detail-span">

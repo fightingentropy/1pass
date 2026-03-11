@@ -768,6 +768,10 @@ body::after {
     font-family: "SFMono-Regular", "JetBrains Mono", monospace;
 }
 
+.secret-value.masked {
+    color: var(--muted);
+}
+
 .detail-footer {
     margin-top: 20px;
     display: flex;
