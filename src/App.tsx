@@ -199,6 +199,12 @@ function formatTimestamp(value: number) {
   return new Date(value).toLocaleString();
 }
 
+function maskSecretValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return "Not provided";
+  return "*".repeat(Math.max(12, Math.min(trimmed.length, 24)));
+}
+
 async function hashLegacyPassword(password: string, salt: string) {
   const encoded = new TextEncoder().encode(`${salt}:${password}`);
   const digest = await crypto.subtle.digest("SHA-256", encoded);
@@ -325,6 +331,7 @@ export default function App() {
   const [query, setQuery] = createSignal("");
   const [selectedIdentityId, setSelectedIdentityId] = createSignal("");
   const [selectedApiKeyId, setSelectedApiKeyId] = createSignal("");
+  const [isApiKeyVisible, setIsApiKeyVisible] = createSignal(false);
   const [isModalOpen, setIsModalOpen] = createSignal(false);
   const [draft, setDraft] = createSignal<IdentityDraft>(createIdentityDraft());
   const [apiKeyDraft, setApiKeyDraft] = createSignal<ApiKeyDraft>(createApiKeyDraft());
@@ -471,6 +478,13 @@ export default function App() {
     }
   });
 
+  createEffect(() => {
+    view();
+    activeSection();
+    selectedApiKeyId();
+    setIsApiKeyVisible(false);
+  });
+
   const handleSetup = async (event: Event) => {
     event.preventDefault();
     setError("");
@@ -543,6 +557,7 @@ export default function App() {
     setSession(null);
     setSelectedIdentityId("");
     setSelectedApiKeyId("");
+    setIsApiKeyVisible(false);
     setLastSaved(null);
     setPersistedVaultJson(JSON.stringify(createVaultDefault()));
     setIsModalOpen(false);
@@ -1010,11 +1025,27 @@ export default function App() {
                                 <p>{item().environment.trim() || "Not provided"}</p>
                               </div>
                               <div class="detail-span">
-                                <span class="meta-label">API Key</span>
-                                <p class="secret-value masked">
-                                  {item().key.trim()
-                                    ? "Hidden. Press edit to view or update."
-                                    : "Not provided"}
+                                <div class="secret-header">
+                                  <span class="meta-label">API Key</span>
+                                  <button
+                                    class="secret-toggle"
+                                    type="button"
+                                    onClick={() =>
+                                      setIsApiKeyVisible((current) => !current)
+                                    }
+                                    disabled={!item().key.trim()}
+                                  >
+                                    {isApiKeyVisible() ? "Hide" : "Show"}
+                                  </button>
+                                </div>
+                                <p
+                                  class={`secret-value ${
+                                    isApiKeyVisible() ? "" : "masked"
+                                  }`}
+                                >
+                                  {isApiKeyVisible()
+                                    ? item().key.trim() || "Not provided"
+                                    : maskSecretValue(item().key)}
                                 </p>
                               </div>
                               <div class="detail-span">

@@ -758,6 +758,13 @@ body::after {
     grid-column: 1 / -1;
 }
 
+.secret-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
 .notes-content {
     white-space: pre-line;
 }
@@ -770,6 +777,25 @@ body::after {
 
 .secret-value.masked {
     color: var(--muted);
+    letter-spacing: 0.12em;
+}
+
+.secret-toggle {
+    border: 1px solid var(--border);
+    background: #111114;
+    color: var(--foreground);
+    border-radius: 999px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+
+.secret-toggle:disabled {
+    opacity: 0.5;
+    cursor: default;
 }
 
 .detail-footer {
