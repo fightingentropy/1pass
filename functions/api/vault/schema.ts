@@ -13,8 +13,20 @@ export type VaultIdentityItem = {
   updatedAt: number;
 };
 
+export type VaultApiKeyItem = {
+  id: string;
+  label: string;
+  service: string;
+  key: string;
+  environment: string;
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type VaultPayload = {
   identities: VaultIdentityItem[];
+  apiKeys: VaultApiKeyItem[];
 };
 
 export type VaultEncryptedPayload = {
@@ -32,6 +44,7 @@ export type VaultEncryptedPayload = {
 
 export const DEFAULT_VAULT_PAYLOAD: VaultPayload = {
   identities: [],
+  apiKeys: [],
 };
 
 export const VAULT_KDF_ITERATIONS = 310_000;

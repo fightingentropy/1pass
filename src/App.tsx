@@ -10,6 +10,7 @@ import {
   DEFAULT_VAULT_PAYLOAD,
   isVaultEncryptedPayload,
   type VaultEncryptedPayload,
+  type VaultApiKeyItem,
   type VaultIdentityItem,
   type VaultPayload,
 } from "../functions/api/vault/schema";
@@ -28,6 +29,7 @@ const LEGACY_STORAGE_KEYS = {
 };
 
 type GateView = "loading" | "setup" | "locked" | "unlocked";
+type VaultSection = "identities" | "apiKeys";
 
 type IdentityDraft = {
   firstName: string;
@@ -40,6 +42,18 @@ type IdentityDraft = {
   passNumber: string;
   notes: string;
 };
+
+type ApiKeyDraft = {
+  label: string;
+  service: string;
+  key: string;
+  environment: string;
+  notes: string;
+};
+
+type EditingTarget =
+  | { section: "identities"; id: string }
+  | { section: "apiKeys"; id: string };
 
 function createVaultDefault(): VaultPayload {
   return JSON.parse(JSON.stringify(DEFAULT_VAULT_PAYLOAD)) as VaultPayload;
@@ -66,6 +80,16 @@ function createIdentityDraft(): IdentityDraft {
   };
 }
 
+function createApiKeyDraft(): ApiKeyDraft {
+  return {
+    label: "",
+    service: "",
+    key: "",
+    environment: "",
+    notes: "",
+  };
+}
+
 function normalizeIdentityItem(
   raw: Partial<VaultIdentityItem>,
 ): VaultIdentityItem {
@@ -80,6 +104,20 @@ function normalizeIdentityItem(
     nino: typeof raw.nino === "string" ? raw.nino : "",
     nhsNumber: typeof raw.nhsNumber === "string" ? raw.nhsNumber : "",
     passNumber: typeof raw.passNumber === "string" ? raw.passNumber : "",
+    notes: typeof raw.notes === "string" ? raw.notes : "",
+    createdAt: typeof raw.createdAt === "number" ? raw.createdAt : now,
+    updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
+  };
+}
+
+function normalizeApiKeyItem(raw: Partial<VaultApiKeyItem>): VaultApiKeyItem {
+  const now = Date.now();
+  return {
+    id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : createId(),
+    label: typeof raw.label === "string" ? raw.label : "",
+    service: typeof raw.service === "string" ? raw.service : "",
+    key: typeof raw.key === "string" ? raw.key : "",
+    environment: typeof raw.environment === "string" ? raw.environment : "",
     notes: typeof raw.notes === "string" ? raw.notes : "",
     createdAt: typeof raw.createdAt === "number" ? raw.createdAt : now,
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
@@ -105,6 +143,11 @@ function normalizeVault(payload: unknown): VaultPayload {
       identities: partial.identities.map((item) =>
         normalizeIdentityItem(item as Partial<VaultIdentityItem>),
       ),
+      apiKeys: Array.isArray(partial.apiKeys)
+        ? partial.apiKeys.map((item) =>
+            normalizeApiKeyItem(item as Partial<VaultApiKeyItem>),
+          )
+        : [],
     };
   }
 
@@ -148,6 +191,7 @@ function normalizeVault(payload: unknown): VaultPayload {
         updatedAt: now,
       },
     ],
+    apiKeys: [],
   };
 }
 
@@ -273,23 +317,26 @@ async function unlockVaultWithPassword(password: string) {
 export default function App() {
   const [view, setView] = createSignal<GateView>("loading");
   const [vault, setVault] = createSignal<VaultPayload>(createVaultDefault());
+  const [activeSection, setActiveSection] = createSignal<VaultSection>("identities");
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
   const [lastSaved, setLastSaved] = createSignal<number | null>(null);
   const [query, setQuery] = createSignal("");
-  const [selectedId, setSelectedId] = createSignal("");
+  const [selectedIdentityId, setSelectedIdentityId] = createSignal("");
+  const [selectedApiKeyId, setSelectedApiKeyId] = createSignal("");
   const [isModalOpen, setIsModalOpen] = createSignal(false);
   const [draft, setDraft] = createSignal<IdentityDraft>(createIdentityDraft());
+  const [apiKeyDraft, setApiKeyDraft] = createSignal<ApiKeyDraft>(createApiKeyDraft());
   const [modalError, setModalError] = createSignal("");
   const [syncEnabled, setSyncEnabled] = createSignal(false);
-  const [editingId, setEditingId] = createSignal<string | null>(null);
+  const [editingTarget, setEditingTarget] = createSignal<EditingTarget | null>(null);
   const [session, setSession] = createSignal<VaultSession | null>(null);
   const [persistedVaultJson, setPersistedVaultJson] = createSignal(
     JSON.stringify(createVaultDefault()),
   );
 
-  const isEditing = createMemo(() => editingId() !== null);
+  const isEditing = createMemo(() => editingTarget() !== null);
 
   onMount(() => {
     void (async () => {
@@ -335,11 +382,45 @@ export default function App() {
     });
   });
 
+  const filteredApiKeys = createMemo(() => {
+    const term = query().trim().toLowerCase();
+    const items = vault().apiKeys;
+    if (!term) return items;
+    return items.filter((item) => {
+      const haystack = [
+        item.label,
+        item.service,
+        item.key,
+        item.environment,
+        item.notes,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(term);
+    });
+  });
+
   const selectedIdentity = createMemo(() => {
     const items = filteredIdentities();
     if (!items.length) return null;
-    return items.find((item) => item.id === selectedId()) ?? items[0];
+    return items.find((item) => item.id === selectedIdentityId()) ?? items[0];
   });
+
+  const selectedApiKey = createMemo(() => {
+    const items = filteredApiKeys();
+    if (!items.length) return null;
+    return items.find((item) => item.id === selectedApiKeyId()) ?? items[0];
+  });
+
+  const sectionTitle = createMemo(() =>
+    activeSection() === "identities" ? "Identities" : "API Keys",
+  );
+
+  const sectionSubtitle = createMemo(() =>
+    activeSection() === "identities"
+      ? "Create and manage personal identities without a wizard."
+      : "Store service tokens and API secrets inside the encrypted vault.",
+  );
 
   createEffect(() => {
     const currentSession = session();
@@ -368,13 +449,25 @@ export default function App() {
 
   createEffect(() => {
     if (view() !== "unlocked") return;
-    const items = filteredIdentities();
-    if (items.length === 0) {
-      setSelectedId("");
+    if (activeSection() === "identities") {
+      const items = filteredIdentities();
+      if (items.length === 0) {
+        setSelectedIdentityId("");
+        return;
+      }
+      if (!items.find((item) => item.id === selectedIdentityId())) {
+        setSelectedIdentityId(items[0].id);
+      }
       return;
     }
-    if (!items.find((item) => item.id === selectedId())) {
-      setSelectedId(items[0].id);
+
+    const items = filteredApiKeys();
+    if (items.length === 0) {
+      setSelectedApiKeyId("");
+      return;
+    }
+    if (!items.find((item) => item.id === selectedApiKeyId())) {
+      setSelectedApiKeyId(items[0].id);
     }
   });
 
@@ -443,25 +536,34 @@ export default function App() {
   const handleLock = () => {
     setView("locked");
     setVault(createVaultDefault());
+    setActiveSection("identities");
     setPassword("");
     setQuery("");
     setSyncEnabled(false);
     setSession(null);
-    setSelectedId("");
+    setSelectedIdentityId("");
+    setSelectedApiKeyId("");
     setLastSaved(null);
     setPersistedVaultJson(JSON.stringify(createVaultDefault()));
     setIsModalOpen(false);
-    setEditingId(null);
+    setEditingTarget(null);
   };
 
-  const handleOpenModal = () => {
+  const handleOpenIdentityModal = () => {
     setDraft(createIdentityDraft());
-    setEditingId(null);
+    setEditingTarget(null);
     setModalError("");
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (identity: VaultIdentityItem) => {
+  const handleOpenApiKeyModal = () => {
+    setApiKeyDraft(createApiKeyDraft());
+    setEditingTarget(null);
+    setModalError("");
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditIdentityModal = (identity: VaultIdentityItem) => {
     setDraft({
       firstName: identity.firstName,
       lastName: identity.lastName,
@@ -473,7 +575,20 @@ export default function App() {
       passNumber: identity.passNumber,
       notes: identity.notes,
     });
-    setEditingId(identity.id);
+    setEditingTarget({ section: "identities", id: identity.id });
+    setModalError("");
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEditApiKeyModal = (item: VaultApiKeyItem) => {
+    setApiKeyDraft({
+      label: item.label,
+      service: item.service,
+      key: item.key,
+      environment: item.environment,
+      notes: item.notes,
+    });
+    setEditingTarget({ section: "apiKeys", id: item.id });
     setModalError("");
     setIsModalOpen(true);
   };
@@ -481,7 +596,7 @@ export default function App() {
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setModalError("");
-    setEditingId(null);
+    setEditingTarget(null);
   };
 
   const handleSaveIdentity = (event: Event) => {
@@ -504,7 +619,9 @@ export default function App() {
     const nextNhsNumber = current.nhsNumber.trim();
     const nextPassNumber = current.passNumber.trim();
     const nextNotes = current.notes.trim();
-    const activeEditingId = editingId();
+    const currentTarget = editingTarget();
+    const activeEditingId =
+      currentTarget?.section === "identities" ? currentTarget.id : null;
 
     if (activeEditingId) {
       setVault((currentVault) => ({
@@ -527,7 +644,7 @@ export default function App() {
             : item,
         ),
       }));
-      setSelectedId(activeEditingId);
+      setSelectedIdentityId(activeEditingId);
     } else {
       const identity: VaultIdentityItem = {
         id: createId(),
@@ -548,11 +665,72 @@ export default function App() {
         ...currentVault,
         identities: [identity, ...currentVault.identities],
       }));
-      setSelectedId(identity.id);
+      setSelectedIdentityId(identity.id);
     }
 
     setIsModalOpen(false);
-    setEditingId(null);
+    setEditingTarget(null);
+  };
+
+  const handleSaveApiKey = (event: Event) => {
+    event.preventDefault();
+    setModalError("");
+
+    const current = apiKeyDraft();
+    if (!current.label.trim() || !current.key.trim()) {
+      setModalError("Label and API key are required.");
+      return;
+    }
+
+    const now = Date.now();
+    const nextLabel = current.label.trim();
+    const nextService = current.service.trim();
+    const nextKey = current.key.trim();
+    const nextEnvironment = current.environment.trim();
+    const nextNotes = current.notes.trim();
+    const currentTarget = editingTarget();
+    const activeEditingId =
+      currentTarget?.section === "apiKeys" ? currentTarget.id : null;
+
+    if (activeEditingId) {
+      setVault((currentVault) => ({
+        ...currentVault,
+        apiKeys: currentVault.apiKeys.map((item) =>
+          item.id === activeEditingId
+            ? {
+                ...item,
+                label: nextLabel,
+                service: nextService,
+                key: nextKey,
+                environment: nextEnvironment,
+                notes: nextNotes,
+                updatedAt: now,
+              }
+            : item,
+        ),
+      }));
+      setSelectedApiKeyId(activeEditingId);
+    } else {
+      const apiKey: VaultApiKeyItem = {
+        id: createId(),
+        label: nextLabel,
+        service: nextService,
+        key: nextKey,
+        environment: nextEnvironment,
+        notes: nextNotes,
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      setVault((currentVault) => ({
+        ...currentVault,
+        apiKeys: [apiKey, ...currentVault.apiKeys],
+      }));
+      setSelectedApiKeyId(apiKey.id);
+    }
+
+    setIsModalOpen(false);
+    setEditingTarget(null);
   };
 
   return (
@@ -641,13 +819,31 @@ export default function App() {
           <section class="dashboard">
             <aside class="vault-sidebar">
               <nav class="nav-list">
-                <button class="nav-item active" type="button">
-                  All Items
-                  <span>{vault().identities.length}</span>
-                </button>
-                <button class="nav-item" type="button">
+                <button
+                  class={`nav-item ${
+                    activeSection() === "identities" ? "active" : ""
+                  }`}
+                  type="button"
+                  onClick={() => {
+                    setActiveSection("identities");
+                    setQuery("");
+                  }}
+                >
                   Identities
                   <span>{vault().identities.length}</span>
+                </button>
+                <button
+                  class={`nav-item ${
+                    activeSection() === "apiKeys" ? "active" : ""
+                  }`}
+                  type="button"
+                  onClick={() => {
+                    setActiveSection("apiKeys");
+                    setQuery("");
+                  }}
+                >
+                  API Keys
+                  <span>{vault().apiKeys.length}</span>
                 </button>
               </nav>
             </aside>
@@ -656,17 +852,19 @@ export default function App() {
               <div class="main-header">
                 <div>
                   <p class="eyebrow">Vault items</p>
-                  <h1>Identities</h1>
-                  <p class="subtitle">
-                    Create and manage personal identities without a wizard.
-                  </p>
+                  <h1>{sectionTitle()}</h1>
+                  <p class="subtitle">{sectionSubtitle()}</p>
                 </div>
                 <div class="action-row">
                   <label class="search-field">
-                    <span class="sr-only">Search identities</span>
+                    <span class="sr-only">Search vault items</span>
                     <input
                       type="search"
-                      placeholder="Search identities"
+                      placeholder={
+                        activeSection() === "identities"
+                          ? "Search identities"
+                          : "Search API keys"
+                      }
                       value={query()}
                       onInput={(event) => setQuery(event.currentTarget.value)}
                     />
@@ -674,7 +872,13 @@ export default function App() {
                   <button
                     class="btn primary icon"
                     type="button"
-                    onClick={handleOpenModal}
+                    onClick={() => {
+                      if (activeSection() === "identities") {
+                        handleOpenIdentityModal();
+                      } else {
+                        handleOpenApiKeyModal();
+                      }
+                    }}
                   >
                     + New
                   </button>
@@ -684,148 +888,252 @@ export default function App() {
               <div class="items-grid">
                 <div class="items-list">
                   <div class="list-header">
-                    <span>{filteredIdentities().length} results</span>
+                    <span>
+                      {activeSection() === "identities"
+                        ? filteredIdentities().length
+                        : filteredApiKeys().length}{" "}
+                      results
+                    </span>
                     <span class="muted">Sorted by newest</span>
                   </div>
                   <div class="list-body">
                     <Show
-                      when={filteredIdentities().length > 0}
-                      fallback={<p class="empty">No identities yet.</p>}
+                      when={activeSection() === "identities"}
+                      fallback={
+                        <Show
+                          when={filteredApiKeys().length > 0}
+                          fallback={<p class="empty">No API keys yet.</p>}
+                        >
+                          <For each={filteredApiKeys()}>
+                            {(item) => (
+                              <button
+                                class={`list-item ${
+                                  selectedApiKey()?.id === item.id ? "active" : ""
+                                }`}
+                                type="button"
+                                onClick={() => setSelectedApiKeyId(item.id)}
+                              >
+                                <div>
+                                  <strong>{item.label}</strong>
+                                  <span class="muted">
+                                    {item.service ||
+                                      item.environment ||
+                                      "No service details"}
+                                  </span>
+                                </div>
+                                <span class="pill">API Key</span>
+                              </button>
+                            )}
+                          </For>
+                        </Show>
+                      }
                     >
-                      <For each={filteredIdentities()}>
-                        {(item) => (
-                          <button
-                            class={`list-item ${
-                              selectedIdentity()?.id === item.id ? "active" : ""
-                            }`}
-                            type="button"
-                            onClick={() => setSelectedId(item.id)}
-                          >
-                            <div>
-                              <strong>
-                                {item.firstName} {item.lastName}
-                              </strong>
-                              <span class="muted">
-                                {item.email ||
-                                  item.phone ||
-                                  "No contact details"}
-                              </span>
-                            </div>
-                            <span class="pill">Identity</span>
-                          </button>
-                        )}
-                      </For>
+                      <Show
+                        when={filteredIdentities().length > 0}
+                        fallback={<p class="empty">No identities yet.</p>}
+                      >
+                        <For each={filteredIdentities()}>
+                          {(item) => (
+                            <button
+                              class={`list-item ${
+                                selectedIdentity()?.id === item.id ? "active" : ""
+                              }`}
+                              type="button"
+                              onClick={() => setSelectedIdentityId(item.id)}
+                            >
+                              <div>
+                                <strong>
+                                  {item.firstName} {item.lastName}
+                                </strong>
+                                <span class="muted">
+                                  {item.email ||
+                                    item.phone ||
+                                    "No contact details"}
+                                </span>
+                              </div>
+                              <span class="pill">Identity</span>
+                            </button>
+                          )}
+                        </For>
+                      </Show>
                     </Show>
                   </div>
                 </div>
 
                 <div class="detail-card">
                   <Show
-                    when={selectedIdentity()}
+                    when={activeSection() === "identities"}
                     fallback={
-                      <div class="empty-detail">
-                        <p>Select an identity to view details.</p>
-                      </div>
+                      <Show
+                        when={selectedApiKey()}
+                        fallback={
+                          <div class="empty-detail">
+                            <p>Select an API key to view details.</p>
+                          </div>
+                        }
+                      >
+                        {(item) => (
+                          <div>
+                            <div class="detail-header">
+                              <div>
+                                <h2>{item().label}</h2>
+                                <p class="muted">API key record</p>
+                              </div>
+                              <div class="detail-actions">
+                                <span class="pill">Secret</span>
+                                <button
+                                  class="icon-button icon-only"
+                                  type="button"
+                                  aria-label="Edit API key"
+                                  onClick={() => handleOpenEditApiKeyModal(item())}
+                                >
+                                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path
+                                      d="M16.862 4.487a1.5 1.5 0 0 1 2.121 2.122l-9.9 9.9-3.36.39.39-3.36 9.9-9.9Zm-12.6 14.4h15.3"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                      stroke-width="1.6"
+                                    />
+                                  </svg>
+                                </button>
+                              </div>
+                            </div>
+                            <div class="detail-grid">
+                              <div>
+                                <span class="meta-label">Service</span>
+                                <p>{item().service.trim() || "Not provided"}</p>
+                              </div>
+                              <div>
+                                <span class="meta-label">Environment</span>
+                                <p>{item().environment.trim() || "Not provided"}</p>
+                              </div>
+                              <div class="detail-span">
+                                <span class="meta-label">API Key</span>
+                                <p class="secret-value">
+                                  {item().key.trim() || "Not provided"}
+                                </p>
+                              </div>
+                              <div class="detail-span">
+                                <span class="meta-label">Notes</span>
+                                <p class="notes-content">
+                                  {item().notes.trim() || "Not provided"}
+                                </p>
+                              </div>
+                            </div>
+                            <div class="detail-footer">
+                              <span class="meta-label">Created</span>
+                              <strong>{formatTimestamp(item().createdAt)}</strong>
+                            </div>
+                          </div>
+                        )}
+                      </Show>
                     }
                   >
-                    {(identity) => (
-                      <div>
-                        <div class="detail-header">
-                          <div>
-                            <h2>
-                              {identity().firstName} {identity().lastName}
-                            </h2>
-                            <p class="muted">Identity record</p>
+                    <Show
+                      when={selectedIdentity()}
+                      fallback={
+                        <div class="empty-detail">
+                          <p>Select an identity to view details.</p>
+                        </div>
+                      }
+                    >
+                      {(identity) => (
+                        <div>
+                          <div class="detail-header">
+                            <div>
+                              <h2>
+                                {identity().firstName} {identity().lastName}
+                              </h2>
+                              <p class="muted">Identity record</p>
+                            </div>
+                            <div class="detail-actions">
+                              <span class="pill">Private</span>
+                              <button
+                                class="icon-button icon-only"
+                                type="button"
+                                aria-label="Edit identity"
+                                onClick={() => handleOpenEditIdentityModal(identity())}
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                  <path
+                                    d="M16.862 4.487a1.5 1.5 0 0 1 2.121 2.122l-9.9 9.9-3.36.39.39-3.36 9.9-9.9Zm-12.6 14.4h15.3"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="1.6"
+                                  />
+                                </svg>
+                              </button>
+                            </div>
                           </div>
-                          <div class="detail-actions">
-                            <span class="pill">Private</span>
-                            <button
-                              class="icon-button icon-only"
-                              type="button"
-                              aria-label="Edit identity"
-                              onClick={() =>
-                                handleOpenEditModal(identity())
-                              }
-                            >
-                              <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <path
-                                  d="M16.862 4.487a1.5 1.5 0 0 1 2.121 2.122l-9.9 9.9-3.36.39.39-3.36 9.9-9.9Zm-12.6 14.4h15.3"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  stroke-linecap="round"
-                                  stroke-linejoin="round"
-                                  stroke-width="1.6"
-                                />
-                              </svg>
-                            </button>
+                          <div class="detail-grid">
+                            <div>
+                              <span class="meta-label">Email</span>
+                              <p>
+                                {identity().email.trim().length > 0
+                                  ? identity().email
+                                  : "Not provided"}
+                              </p>
+                            </div>
+                            <div>
+                              <span class="meta-label">Phone</span>
+                              <p>
+                                {identity().phone.trim().length > 0
+                                  ? identity().phone
+                                  : "Not provided"}
+                              </p>
+                            </div>
+                            <div>
+                              <span class="meta-label">Address</span>
+                              <p>
+                                {identity().address.trim().length > 0
+                                  ? identity().address
+                                  : "Not provided"}
+                              </p>
+                            </div>
+                            <div>
+                              <span class="meta-label">NINO</span>
+                              <p>
+                                {identity().nino.trim().length > 0
+                                  ? identity().nino
+                                  : "Not provided"}
+                              </p>
+                            </div>
+                            <div>
+                              <span class="meta-label">NHS Number</span>
+                              <p>
+                                {identity().nhsNumber.trim().length > 0
+                                  ? identity().nhsNumber
+                                  : "Not provided"}
+                              </p>
+                            </div>
+                            <div>
+                              <span class="meta-label">Pass No</span>
+                              <p>
+                                {identity().passNumber.trim().length > 0
+                                  ? identity().passNumber
+                                  : "Not provided"}
+                              </p>
+                            </div>
+                            <div>
+                              <span class="meta-label">Notes</span>
+                              <p class="notes-content">
+                                {identity().notes.trim().length > 0
+                                  ? identity().notes
+                                  : "Not provided"}
+                              </p>
+                            </div>
+                          </div>
+                          <div class="detail-footer">
+                            <span class="meta-label">Created</span>
+                            <strong>{formatTimestamp(identity().createdAt)}</strong>
                           </div>
                         </div>
-                        <div class="detail-grid">
-                          <div>
-                            <span class="meta-label">Email</span>
-                            <p>
-                              {identity().email.trim().length > 0
-                                ? identity().email
-                                : "Not provided"}
-                            </p>
-                          </div>
-                          <div>
-                            <span class="meta-label">Phone</span>
-                            <p>
-                              {identity().phone.trim().length > 0
-                                ? identity().phone
-                                : "Not provided"}
-                            </p>
-                          </div>
-                          <div>
-                            <span class="meta-label">Address</span>
-                            <p>
-                              {identity().address.trim().length > 0
-                                ? identity().address
-                                : "Not provided"}
-                            </p>
-                          </div>
-                          <div>
-                            <span class="meta-label">NINO</span>
-                            <p>
-                              {identity().nino.trim().length > 0
-                                ? identity().nino
-                                : "Not provided"}
-                            </p>
-                          </div>
-                          <div>
-                            <span class="meta-label">NHS Number</span>
-                            <p>
-                              {identity().nhsNumber.trim().length > 0
-                                ? identity().nhsNumber
-                                : "Not provided"}
-                            </p>
-                          </div>
-                          <div>
-                            <span class="meta-label">Pass No</span>
-                            <p>
-                              {identity().passNumber.trim().length > 0
-                                ? identity().passNumber
-                                : "Not provided"}
-                            </p>
-                          </div>
-                          <div>
-                            <span class="meta-label">Notes</span>
-                            <p class="notes-content">
-                              {identity().notes.trim().length > 0
-                                ? identity().notes
-                                : "Not provided"}
-                            </p>
-                          </div>
-                        </div>
-                        <div class="detail-footer">
-                          <span class="meta-label">Created</span>
-                          <strong>
-                            {formatTimestamp(identity().createdAt)}
-                          </strong>
-                        </div>
-                      </div>
-                    )}
+                      )}
+                    </Show>
                   </Show>
                 </div>
               </div>
@@ -837,163 +1145,279 @@ export default function App() {
       <Show when={isModalOpen()}>
         <div class="modal-backdrop" onClick={handleCloseModal}>
           <div class="modal" onClick={(event) => event.stopPropagation()}>
-            <div class="modal-header">
-              <div>
-                <p class="eyebrow">
-                  {isEditing() ? "Edit identity" : "New identity"}
-                </p>
-                <h2>{isEditing() ? "Edit identity" : "Create identity"}</h2>
-                <p class="muted">
-                  First name and last name are required. Everything else is
-                  optional.
-                </p>
-              </div>
-              <button
-                class="icon-button"
-                type="button"
-                onClick={handleCloseModal}
-              >
-                Close
-              </button>
-            </div>
-            <form class="modal-form" onSubmit={handleSaveIdentity}>
-              <div class="modal-grid">
-                <label class="field">
-                  <span class="field-label">First name</span>
-                  <input
-                    type="text"
-                    value={draft().firstName}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        firstName: event.currentTarget.value,
-                      }))
-                    }
-                    required
-                  />
-                </label>
-                <label class="field">
-                  <span class="field-label">Last name</span>
-                  <input
-                    type="text"
-                    value={draft().lastName}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        lastName: event.currentTarget.value,
-                      }))
-                    }
-                    required
-                  />
-                </label>
-                <label class="field">
-                  <span class="field-label">Email</span>
-                  <input
-                    type="email"
-                    value={draft().email}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        email: event.currentTarget.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label class="field">
-                  <span class="field-label">Phone</span>
-                  <input
-                    type="tel"
-                    value={draft().phone}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        phone: event.currentTarget.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label class="field full">
-                  <span class="field-label">Address</span>
-                  <input
-                    type="text"
-                    value={draft().address}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        address: event.currentTarget.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label class="field">
-                  <span class="field-label">NINO</span>
-                  <input
-                    type="text"
-                    value={draft().nino}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        nino: event.currentTarget.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label class="field">
-                  <span class="field-label">NHS Number</span>
-                  <input
-                    type="text"
-                    value={draft().nhsNumber}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        nhsNumber: event.currentTarget.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label class="field">
-                  <span class="field-label">Pass No</span>
-                  <input
-                    type="text"
-                    value={draft().passNumber}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        passNumber: event.currentTarget.value,
-                      }))
-                    }
-                  />
-                </label>
-                <label class="field full">
-                  <span class="field-label">Notes</span>
-                  <textarea
-                    rows={3}
-                    value={draft().notes}
-                    onInput={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        notes: event.currentTarget.value,
-                      }))
-                    }
-                  />
-                </label>
-              </div>
-              <Show when={Boolean(modalError())}>
-                <div class="form-error">{modalError()}</div>
-              </Show>
-              <div class="modal-actions">
+            <Show
+              when={
+                activeSection() === "identities" ||
+                editingTarget()?.section === "identities"
+              }
+              fallback={
+                <>
+                  <div class="modal-header">
+                    <div>
+                      <p class="eyebrow">
+                        {isEditing() ? "Edit API key" : "New API key"}
+                      </p>
+                      <h2>{isEditing() ? "Edit API key" : "Create API key"}</h2>
+                      <p class="muted">
+                        Label and API key are required. Service, environment, and
+                        notes are optional.
+                      </p>
+                    </div>
+                    <button
+                      class="icon-button"
+                      type="button"
+                      onClick={handleCloseModal}
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <form class="modal-form" onSubmit={handleSaveApiKey}>
+                    <div class="modal-grid">
+                      <label class="field">
+                        <span class="field-label">Label</span>
+                        <input
+                          type="text"
+                          value={apiKeyDraft().label}
+                          onInput={(event) =>
+                            setApiKeyDraft((current) => ({
+                              ...current,
+                              label: event.currentTarget.value,
+                            }))
+                          }
+                          required
+                        />
+                      </label>
+                      <label class="field">
+                        <span class="field-label">Service</span>
+                        <input
+                          type="text"
+                          value={apiKeyDraft().service}
+                          onInput={(event) =>
+                            setApiKeyDraft((current) => ({
+                              ...current,
+                              service: event.currentTarget.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label class="field full">
+                        <span class="field-label">API Key</span>
+                        <textarea
+                          rows={4}
+                          value={apiKeyDraft().key}
+                          onInput={(event) =>
+                            setApiKeyDraft((current) => ({
+                              ...current,
+                              key: event.currentTarget.value,
+                            }))
+                          }
+                          required
+                        />
+                      </label>
+                      <label class="field">
+                        <span class="field-label">Environment</span>
+                        <input
+                          type="text"
+                          value={apiKeyDraft().environment}
+                          onInput={(event) =>
+                            setApiKeyDraft((current) => ({
+                              ...current,
+                              environment: event.currentTarget.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label class="field full">
+                        <span class="field-label">Notes</span>
+                        <textarea
+                          rows={3}
+                          value={apiKeyDraft().notes}
+                          onInput={(event) =>
+                            setApiKeyDraft((current) => ({
+                              ...current,
+                              notes: event.currentTarget.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <Show when={Boolean(modalError())}>
+                      <div class="form-error">{modalError()}</div>
+                    </Show>
+                    <div class="modal-actions">
+                      <button
+                        class="btn ghost"
+                        type="button"
+                        onClick={handleCloseModal}
+                      >
+                        Cancel
+                      </button>
+                      <button class="btn primary" type="submit">
+                        {isEditing() ? "Save changes" : "Save API key"}
+                      </button>
+                    </div>
+                  </form>
+                </>
+              }
+            >
+              <div class="modal-header">
+                <div>
+                  <p class="eyebrow">
+                    {isEditing() ? "Edit identity" : "New identity"}
+                  </p>
+                  <h2>{isEditing() ? "Edit identity" : "Create identity"}</h2>
+                  <p class="muted">
+                    First name and last name are required. Everything else is
+                    optional.
+                  </p>
+                </div>
                 <button
-                  class="btn ghost"
+                  class="icon-button"
                   type="button"
                   onClick={handleCloseModal}
                 >
-                  Cancel
-                </button>
-                <button class="btn primary" type="submit">
-                  {isEditing() ? "Save changes" : "Save identity"}
+                  Close
                 </button>
               </div>
-            </form>
+              <form class="modal-form" onSubmit={handleSaveIdentity}>
+                <div class="modal-grid">
+                  <label class="field">
+                    <span class="field-label">First name</span>
+                    <input
+                      type="text"
+                      value={draft().firstName}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          firstName: event.currentTarget.value,
+                        }))
+                      }
+                      required
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Last name</span>
+                    <input
+                      type="text"
+                      value={draft().lastName}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          lastName: event.currentTarget.value,
+                        }))
+                      }
+                      required
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Email</span>
+                    <input
+                      type="email"
+                      value={draft().email}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          email: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Phone</span>
+                    <input
+                      type="tel"
+                      value={draft().phone}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          phone: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label class="field full">
+                    <span class="field-label">Address</span>
+                    <input
+                      type="text"
+                      value={draft().address}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          address: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">NINO</span>
+                    <input
+                      type="text"
+                      value={draft().nino}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          nino: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">NHS Number</span>
+                    <input
+                      type="text"
+                      value={draft().nhsNumber}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          nhsNumber: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Pass No</span>
+                    <input
+                      type="text"
+                      value={draft().passNumber}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          passNumber: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label class="field full">
+                    <span class="field-label">Notes</span>
+                    <textarea
+                      rows={3}
+                      value={draft().notes}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          notes: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+                <Show when={Boolean(modalError())}>
+                  <div class="form-error">{modalError()}</div>
+                </Show>
+                <div class="modal-actions">
+                  <button
+                    class="btn ghost"
+                    type="button"
+                    onClick={handleCloseModal}
+                  >
+                    Cancel
+                  </button>
+                  <button class="btn primary" type="submit">
+                    {isEditing() ? "Save changes" : "Save identity"}
+                  </button>
+                </div>
+              </form>
+            </Show>
           </div>
         </div>
       </Show>

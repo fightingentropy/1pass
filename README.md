@@ -23,7 +23,7 @@ Open [http://localhost:5173](http://localhost:5173) to access the vault.
 
 - Browser-side encryption before vault sync
 - Master-password unlock using PBKDF2-derived AES-GCM keys
-- Identity record storage and search
+- Identity and API key storage inside the same encrypted vault
 - Legacy plaintext vault migration on first unlock
 - Cloudflare Pages Function API for init, status, load, and save
 
