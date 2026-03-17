@@ -3,6 +3,7 @@ import {
   createMemo,
   createSignal,
   For,
+  onCleanup,
   onMount,
   Show,
 } from "solid-js";
@@ -321,6 +322,7 @@ async function unlockVaultWithPassword(password: string) {
 }
 
 export default function App() {
+  let copiedSecretResetTimer: number | undefined;
   const [view, setView] = createSignal<GateView>("loading");
   const [vault, setVault] = createSignal<VaultPayload>(createVaultDefault());
   const [activeSection, setActiveSection] = createSignal<VaultSection>("identities");
@@ -332,6 +334,7 @@ export default function App() {
   const [selectedIdentityId, setSelectedIdentityId] = createSignal("");
   const [selectedApiKeyId, setSelectedApiKeyId] = createSignal("");
   const [isApiKeyVisible, setIsApiKeyVisible] = createSignal(false);
+  const [copiedApiKeyId, setCopiedApiKeyId] = createSignal("");
   const [isModalOpen, setIsModalOpen] = createSignal(false);
   const [draft, setDraft] = createSignal<IdentityDraft>(createIdentityDraft());
   const [apiKeyDraft, setApiKeyDraft] = createSignal<ApiKeyDraft>(createApiKeyDraft());
@@ -608,6 +611,12 @@ export default function App() {
     setIsModalOpen(true);
   };
 
+  onCleanup(() => {
+    if (copiedSecretResetTimer) {
+      window.clearTimeout(copiedSecretResetTimer);
+    }
+  });
+
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setModalError("");
@@ -746,6 +755,25 @@ export default function App() {
 
     setIsModalOpen(false);
     setEditingTarget(null);
+  };
+
+  const handleCopyApiKey = async (item: VaultApiKeyItem) => {
+    const key = item.key.trim();
+    if (!key) return;
+
+    try {
+      await navigator.clipboard.writeText(key);
+      setCopiedApiKeyId(item.id);
+      if (copiedSecretResetTimer) {
+        window.clearTimeout(copiedSecretResetTimer);
+      }
+      copiedSecretResetTimer = window.setTimeout(() => {
+        setCopiedApiKeyId((current) => (current === item.id ? "" : current));
+      }, 1800);
+    } catch (copyError) {
+      console.error(copyError);
+      setError("Unable to copy the API key.");
+    }
   };
 
   return (
@@ -1027,16 +1055,28 @@ export default function App() {
                               <div class="detail-span">
                                 <div class="secret-header">
                                   <span class="meta-label">API Key</span>
-                                  <button
-                                    class="secret-toggle"
-                                    type="button"
-                                    onClick={() =>
-                                      setIsApiKeyVisible((current) => !current)
-                                    }
-                                    disabled={!item().key.trim()}
-                                  >
-                                    {isApiKeyVisible() ? "Hide" : "Show"}
-                                  </button>
+                                  <div class="secret-actions">
+                                    <button
+                                      class={`secret-toggle ${
+                                        copiedApiKeyId() === item().id ? "is-success" : ""
+                                      }`}
+                                      type="button"
+                                      onClick={() => void handleCopyApiKey(item())}
+                                      disabled={!item().key.trim()}
+                                    >
+                                      {copiedApiKeyId() === item().id ? "Copied" : "Copy"}
+                                    </button>
+                                    <button
+                                      class="secret-toggle"
+                                      type="button"
+                                      onClick={() =>
+                                        setIsApiKeyVisible((current) => !current)
+                                      }
+                                      disabled={!item().key.trim()}
+                                    >
+                                      {isApiKeyVisible() ? "Hide" : "Show"}
+                                    </button>
+                                  </div>
                                 </div>
                                 <p
                                   class={`secret-value ${

@@ -765,6 +765,14 @@ body::after {
     gap: 12px;
 }
 
+.secret-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .notes-content {
     white-space: pre-line;
 }
@@ -791,6 +799,12 @@ body::after {
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.12em;
+}
+
+.secret-toggle.is-success {
+    border-color: #14532d;
+    background: #052e16;
+    color: #bbf7d0;
 }
 
 .secret-toggle:disabled {
