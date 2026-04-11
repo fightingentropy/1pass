@@ -22,9 +22,13 @@
 body {
     margin: 0;
     min-height: 100vh;
-    font-family: "Geist", sans-serif;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     color: var(--foreground);
     background: var(--background);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-feature-settings: "cv11", "ss01";
+    line-height: 1.5;
 }
 
 body::before,
@@ -95,13 +99,15 @@ body::after {
 
 .brand-mark {
     font-size: 26px;
-    letter-spacing: 0.02em;
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
 .brand-subtitle {
-    font-size: 13px;
+    font-size: 11px;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.28em;
+    letter-spacing: 0.18em;
     color: var(--muted);
 }
 
@@ -178,7 +184,9 @@ body::after {
 }
 
 .gate-card h1 {
-    font-size: clamp(26px, 4vw, 38px);
+    font-size: clamp(26px, 4vw, 36px);
+    font-weight: 700;
+    letter-spacing: -0.025em;
     margin: 0;
 }
 
@@ -474,21 +482,25 @@ body::after {
 .main-header h1 {
     margin: 0;
     font-size: clamp(26px, 4vw, 36px);
+    font-weight: 700;
+    letter-spacing: -0.025em;
 }
 
 .eyebrow {
     margin: 0 0 6px;
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.14em;
     color: var(--muted);
 }
 
 .meta-label {
     display: block;
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.2em;
+    letter-spacing: 0.1em;
     color: var(--muted);
 }
 
@@ -559,9 +571,10 @@ body::after {
     border-radius: 999px;
     border: 1px solid var(--border);
     background: #111114;
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.08em;
 }
 
 .dashboard {
@@ -592,8 +605,15 @@ body::after {
     border: 1px solid var(--border);
     background: #111114;
     color: var(--foreground);
-    font-weight: 600;
+    font-weight: 500;
+    font-size: 14px;
     cursor: pointer;
+    transition: background 0.18s, border-color 0.18s;
+}
+
+.nav-item:hover {
+    background: #161619;
+    border-color: #3f3f46;
 }
 
 .nav-item span {
@@ -622,6 +642,8 @@ body::after {
 .main-header h1 {
     margin: 0;
     font-size: clamp(26px, 4vw, 36px);
+    font-weight: 700;
+    letter-spacing: -0.025em;
 }
 
 .action-row {
@@ -692,30 +714,46 @@ body::after {
     background: #111114;
     text-align: left;
     cursor: pointer;
+    transition: background 0.18s, border-color 0.18s, transform 0.12s;
+}
+
+.list-item:hover {
+    background: #161619;
+    border-color: #3f3f46;
+}
+
+.list-item:active {
+    transform: scale(0.985);
 }
 
 .list-item strong {
     display: block;
-    font-size: 15px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
 }
 
 .list-item .muted {
     font-size: 12px;
+    font-weight: 400;
 }
 
 .list-item.active {
-    border-color: #2f2f34;
-    background: #1f1f23;
+    border-color: #3f3f46;
+    background: #1c1c21;
+    box-shadow: inset 0 0 0 1px rgba(244, 244, 245, 0.04);
 }
 
 .pill {
     padding: 4px 10px;
     border-radius: 999px;
     border: 1px solid var(--border);
-    font-size: 11px;
+    font-size: 10px;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
+    letter-spacing: 0.08em;
     color: var(--muted);
+    transition: border-color 0.18s;
 }
 
 .detail-card {
@@ -741,6 +779,8 @@ body::after {
 
 .detail-header h2 {
     margin: 0;
+    font-weight: 700;
+    letter-spacing: -0.02em;
 }
 
 .detail-grid {
@@ -752,6 +792,8 @@ body::after {
 
 .detail-grid p {
     margin: 4px 0 0;
+    font-size: 14px;
+    line-height: 1.5;
 }
 
 .detail-span {
@@ -777,10 +819,59 @@ body::after {
     white-space: pre-line;
 }
 
+/* Copyable field — click to copy with feedback */
+.copyable-field {
+    position: relative;
+    padding: 8px 10px;
+    margin: -8px -10px;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: background 0.18s;
+}
+
+.copyable-field:hover:not(.empty) {
+    background: #111114;
+}
+
+.copyable-field.empty {
+    cursor: default;
+}
+
+.copied-badge {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #052e16;
+    color: #bbf7d0;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 0.25s, transform 0.25s;
+    pointer-events: none;
+}
+
+.copied-badge svg {
+    width: 12px;
+    height: 12px;
+}
+
+.copied-badge.visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
 .secret-value {
     white-space: pre-wrap;
     word-break: break-word;
-    font-family: "SFMono-Regular", "JetBrains Mono", monospace;
+    font-family: "JetBrains Mono", "SFMono-Regular", monospace;
+    transition: color 0.2s, letter-spacing 0.2s;
 }
 
 .secret-value.masked {
@@ -799,6 +890,16 @@ body::after {
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.12em;
+    transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.15s;
+}
+
+.secret-toggle:hover:not(:disabled) {
+    background: #1a1a1f;
+    border-color: #3f3f46;
+}
+
+.secret-toggle:active:not(:disabled) {
+    transform: scale(0.95);
 }
 
 .secret-toggle.is-success {
@@ -810,6 +911,44 @@ body::after {
 .secret-toggle:disabled {
     opacity: 0.5;
     cursor: default;
+}
+
+/* Icon-based copy button */
+.secret-toggle.icon-copy {
+    position: relative;
+    padding: 6px 8px;
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.secret-toggle.icon-copy svg {
+    width: 15px;
+    height: 15px;
+    position: absolute;
+    transition: opacity 0.2s, transform 0.2s;
+}
+
+.secret-toggle.icon-copy .copy-icon {
+    opacity: 1;
+    transform: scale(1);
+}
+
+.secret-toggle.icon-copy .check-icon {
+    opacity: 0;
+    transform: scale(0.5);
+}
+
+.secret-toggle.icon-copy.is-success .copy-icon {
+    opacity: 0;
+    transform: scale(0.5);
+}
+
+.secret-toggle.icon-copy.is-success .check-icon {
+    opacity: 1;
+    transform: scale(1);
 }
 
 .detail-footer {
@@ -897,6 +1036,16 @@ body::after {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    transition: background 0.18s, border-color 0.18s, transform 0.12s;
+}
+
+.icon-button.icon-only:hover {
+    background: #1a1a1f;
+    border-color: #3f3f46;
+}
+
+.icon-button.icon-only:active {
+    transform: scale(0.92);
 }
 
 .icon-button.icon-only svg {

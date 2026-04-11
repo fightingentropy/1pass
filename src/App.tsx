@@ -325,7 +325,7 @@ export default function App() {
   let copiedSecretResetTimer: number | undefined;
   const [view, setView] = createSignal<GateView>("loading");
   const [vault, setVault] = createSignal<VaultPayload>(createVaultDefault());
-  const [activeSection, setActiveSection] = createSignal<VaultSection>("identities");
+  const [activeSection, setActiveSection] = createSignal<VaultSection>("apiKeys");
   const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal("");
@@ -335,6 +335,7 @@ export default function App() {
   const [selectedApiKeyId, setSelectedApiKeyId] = createSignal("");
   const [isApiKeyVisible, setIsApiKeyVisible] = createSignal(false);
   const [copiedApiKeyId, setCopiedApiKeyId] = createSignal("");
+  const [copiedField, setCopiedField] = createSignal("");
   const [isModalOpen, setIsModalOpen] = createSignal(false);
   const [draft, setDraft] = createSignal<IdentityDraft>(createIdentityDraft());
   const [apiKeyDraft, setApiKeyDraft] = createSignal<ApiKeyDraft>(createApiKeyDraft());
@@ -553,7 +554,7 @@ export default function App() {
   const handleLock = () => {
     setView("locked");
     setVault(createVaultDefault());
-    setActiveSection("identities");
+    setActiveSection("apiKeys");
     setPassword("");
     setQuery("");
     setSyncEnabled(false);
@@ -757,12 +758,31 @@ export default function App() {
     setEditingTarget(null);
   };
 
+  let copiedFieldResetTimer: number | undefined;
+
+  const copyToClipboard = async (text: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fallback for restricted contexts
+    }
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+  };
+
   const handleCopyApiKey = async (item: VaultApiKeyItem) => {
     const key = item.key.trim();
     if (!key) return;
 
     try {
-      await navigator.clipboard.writeText(key);
+      await copyToClipboard(key);
       setCopiedApiKeyId(item.id);
       if (copiedSecretResetTimer) {
         window.clearTimeout(copiedSecretResetTimer);
@@ -773,6 +793,21 @@ export default function App() {
     } catch (copyError) {
       console.error(copyError);
       setError("Unable to copy the API key.");
+    }
+  };
+
+  const handleCopyField = async (value: string, fieldKey: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    try {
+      await copyToClipboard(trimmed);
+      setCopiedField(fieldKey);
+      if (copiedFieldResetTimer) window.clearTimeout(copiedFieldResetTimer);
+      copiedFieldResetTimer = window.setTimeout(() => {
+        setCopiedField((c) => (c === fieldKey ? "" : c));
+      }, 1800);
+    } catch {
+      setError("Unable to copy to clipboard.");
     }
   };
 
@@ -893,11 +928,7 @@ export default function App() {
 
             <main class="main">
               <div class="main-header">
-                <div>
-                  <p class="eyebrow">Vault items</p>
-                  <h1>{sectionTitle()}</h1>
-                  <p class="subtitle">{sectionSubtitle()}</p>
-                </div>
+                <div />
                 <div class="action-row">
                   <label class="search-field">
                     <span class="sr-only">Search vault items</span>
@@ -959,9 +990,7 @@ export default function App() {
                                 <div>
                                   <strong>{item.label}</strong>
                                   <span class="muted">
-                                    {item.service ||
-                                      item.environment ||
-                                      "No service details"}
+                                    {item.environment || "No details"}
                                   </span>
                                 </div>
                                 <span class="pill">API Key</span>
@@ -1045,10 +1074,6 @@ export default function App() {
                             </div>
                             <div class="detail-grid">
                               <div>
-                                <span class="meta-label">Service</span>
-                                <p>{item().service.trim() || "Not provided"}</p>
-                              </div>
-                              <div>
                                 <span class="meta-label">Environment</span>
                                 <p>{item().environment.trim() || "Not provided"}</p>
                               </div>
@@ -1057,14 +1082,21 @@ export default function App() {
                                   <span class="meta-label">API Key</span>
                                   <div class="secret-actions">
                                     <button
-                                      class={`secret-toggle ${
+                                      class={`secret-toggle icon-copy ${
                                         copiedApiKeyId() === item().id ? "is-success" : ""
                                       }`}
                                       type="button"
                                       onClick={() => void handleCopyApiKey(item())}
                                       disabled={!item().key.trim()}
+                                      title={copiedApiKeyId() === item().id ? "Copied!" : "Copy API key"}
                                     >
-                                      {copiedApiKeyId() === item().id ? "Copied" : "Copy"}
+                                      <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                                        <rect x="9" y="9" width="13" height="13" rx="2" />
+                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                                      </svg>
+                                      <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M20 6 9 17l-5-5" />
+                                      </svg>
                                     </button>
                                     <button
                                       class="secret-toggle"
@@ -1143,54 +1175,29 @@ export default function App() {
                             </div>
                           </div>
                           <div class="detail-grid">
-                            <div>
-                              <span class="meta-label">Email</span>
-                              <p>
-                                {identity().email.trim().length > 0
-                                  ? identity().email
-                                  : "Not provided"}
-                              </p>
-                            </div>
-                            <div>
-                              <span class="meta-label">Phone</span>
-                              <p>
-                                {identity().phone.trim().length > 0
-                                  ? identity().phone
-                                  : "Not provided"}
-                              </p>
-                            </div>
-                            <div>
-                              <span class="meta-label">Address</span>
-                              <p>
-                                {identity().address.trim().length > 0
-                                  ? identity().address
-                                  : "Not provided"}
-                              </p>
-                            </div>
-                            <div>
-                              <span class="meta-label">NINO</span>
-                              <p>
-                                {identity().nino.trim().length > 0
-                                  ? identity().nino
-                                  : "Not provided"}
-                              </p>
-                            </div>
-                            <div>
-                              <span class="meta-label">NHS Number</span>
-                              <p>
-                                {identity().nhsNumber.trim().length > 0
-                                  ? identity().nhsNumber
-                                  : "Not provided"}
-                              </p>
-                            </div>
-                            <div>
-                              <span class="meta-label">Pass No</span>
-                              <p>
-                                {identity().passNumber.trim().length > 0
-                                  ? identity().passNumber
-                                  : "Not provided"}
-                              </p>
-                            </div>
+                            {([
+                              ["Email", "email", identity().email],
+                              ["Phone", "phone", identity().phone],
+                              ["Address", "address", identity().address],
+                              ["NINO", "nino", identity().nino],
+                              ["NHS Number", "nhsNumber", identity().nhsNumber],
+                              ["Pass No", "passNumber", identity().passNumber],
+                            ] as [string, string, string][]).map(([label, key, value]) => (
+                              <div
+                                class={`copyable-field ${value.trim() ? "" : "empty"}`}
+                                onClick={() => void handleCopyField(value, key)}
+                                title={value.trim() ? "Click to copy" : undefined}
+                              >
+                                <span class="meta-label">{label}</span>
+                                <p>{value.trim() || "Not provided"}</p>
+                                <Show when={value.trim()}>
+                                  <span class={`copied-badge ${copiedField() === key ? "visible" : ""}`}>
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                                    Copied
+                                  </span>
+                                </Show>
+                              </div>
+                            ))}
                             <div>
                               <span class="meta-label">Notes</span>
                               <p class="notes-content">
@@ -1232,8 +1239,8 @@ export default function App() {
                       </p>
                       <h2>{isEditing() ? "Edit API key" : "Create API key"}</h2>
                       <p class="muted">
-                        Label and API key are required. Service, environment, and
-                        notes are optional.
+                        Label and API key are required. Environment and notes
+                        are optional.
                       </p>
                     </div>
                     <button
@@ -1258,19 +1265,6 @@ export default function App() {
                             }))
                           }
                           required
-                        />
-                      </label>
-                      <label class="field">
-                        <span class="field-label">Service</span>
-                        <input
-                          type="text"
-                          value={apiKeyDraft().service}
-                          onInput={(event) =>
-                            setApiKeyDraft((current) => ({
-                              ...current,
-                              service: event.currentTarget.value,
-                            }))
-                          }
                         />
                       </label>
                       <label class="field full">
