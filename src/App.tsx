@@ -196,6 +196,15 @@ function normalizeVault(payload: unknown): VaultPayload {
   };
 }
 
+const IDENTITY_DETAIL_FIELDS = [
+  { label: "Email", field: "email" },
+  { label: "Phone", field: "phone" },
+  { label: "Address", field: "address" },
+  { label: "NINO", field: "nino" },
+  { label: "NHS Number", field: "nhsNumber" },
+  { label: "Pass No", field: "passNumber" },
+] as const;
+
 function formatTimestamp(value: number) {
   return new Date(value).toLocaleString();
 }
@@ -232,12 +241,15 @@ const apiBase = (import.meta.env.VITE_API_BASE as string | undefined)
 
 async function requestJson<T>(path: string, init?: RequestInit) {
   const url = apiBase ? `${apiBase}${path}` : path;
+  const headers: Record<string, string> = {
+    ...(init?.headers as Record<string, string> ?? {}),
+  };
+  if (init?.body) {
+    headers["content-type"] = "application/json";
+  }
   const response = await fetch(url, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    headers,
   });
 
   const text = await response.text();
@@ -323,6 +335,7 @@ async function unlockVaultWithPassword(password: string) {
 
 export default function App() {
   let copiedSecretResetTimer: number | undefined;
+  let copiedFieldResetTimer: number | undefined;
   const [view, setView] = createSignal<GateView>("loading");
   const [vault, setVault] = createSignal<VaultPayload>(createVaultDefault());
   const [activeSection, setActiveSection] = createSignal<VaultSection>("apiKeys");
@@ -401,7 +414,6 @@ export default function App() {
       const haystack = [
         item.label,
         item.service,
-        item.key,
         item.environment,
         item.notes,
       ]
@@ -433,6 +445,7 @@ export default function App() {
       : "Store service tokens and API secrets inside the encrypted vault.",
   );
 
+  let saveVersion = 0;
   createEffect(() => {
     const currentSession = session();
     if (view() !== "unlocked" || !syncEnabled() || !currentSession) return;
@@ -441,13 +454,17 @@ export default function App() {
     const nextVaultJson = JSON.stringify(nextVault);
     if (nextVaultJson === persistedVaultJson()) return;
 
+    const thisVersion = ++saveVersion;
     void (async () => {
       try {
         const encryptedPayload = await encryptVaultPayload(nextVault, currentSession);
+        if (thisVersion !== saveVersion) return;
         await saveVaultRecord(encryptedPayload);
+        if (thisVersion !== saveVersion) return;
         setPersistedVaultJson(nextVaultJson);
         setLastSaved(Date.now());
       } catch (saveError) {
+        if (thisVersion !== saveVersion) return;
         console.error(saveError);
         setError(
           saveError instanceof Error
@@ -552,13 +569,13 @@ export default function App() {
   };
 
   const handleLock = () => {
+    setSyncEnabled(false);
+    setSession(null);
     setView("locked");
     setVault(createVaultDefault());
     setActiveSection("apiKeys");
     setPassword("");
     setQuery("");
-    setSyncEnabled(false);
-    setSession(null);
     setSelectedIdentityId("");
     setSelectedApiKeyId("");
     setIsApiKeyVisible(false);
@@ -615,6 +632,9 @@ export default function App() {
   onCleanup(() => {
     if (copiedSecretResetTimer) {
       window.clearTimeout(copiedSecretResetTimer);
+    }
+    if (copiedFieldResetTimer) {
+      window.clearTimeout(copiedFieldResetTimer);
     }
   });
 
@@ -758,8 +778,6 @@ export default function App() {
     setEditingTarget(null);
   };
 
-  let copiedFieldResetTimer: number | undefined;
-
   const copyToClipboard = async (text: string): Promise<void> => {
     try {
       await navigator.clipboard.writeText(text);
@@ -808,6 +826,28 @@ export default function App() {
       }, 1800);
     } catch {
       setError("Unable to copy to clipboard.");
+    }
+  };
+
+  const handleDeleteIdentity = (id: string) => {
+    if (!window.confirm("Delete this identity? This cannot be undone.")) return;
+    setVault((currentVault) => ({
+      ...currentVault,
+      identities: currentVault.identities.filter((item) => item.id !== id),
+    }));
+    if (selectedIdentityId() === id) {
+      setSelectedIdentityId("");
+    }
+  };
+
+  const handleDeleteApiKey = (id: string) => {
+    if (!window.confirm("Delete this API key? This cannot be undone.")) return;
+    setVault((currentVault) => ({
+      ...currentVault,
+      apiKeys: currentVault.apiKeys.filter((item) => item.id !== id),
+    }));
+    if (selectedApiKeyId() === id) {
+      setSelectedApiKeyId("");
     }
   };
 
@@ -1070,6 +1110,23 @@ export default function App() {
                                     />
                                   </svg>
                                 </button>
+                                <button
+                                  class="icon-button icon-only"
+                                  type="button"
+                                  aria-label="Delete API key"
+                                  onClick={() => handleDeleteApiKey(item().id)}
+                                >
+                                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                                    <path
+                                      d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                      stroke-width="1.6"
+                                    />
+                                  </svg>
+                                </button>
                               </div>
                             </div>
                             <div class="detail-grid">
@@ -1172,38 +1229,51 @@ export default function App() {
                                   />
                                 </svg>
                               </button>
+                              <button
+                                class="icon-button icon-only"
+                                type="button"
+                                aria-label="Delete identity"
+                                onClick={() => handleDeleteIdentity(identity().id)}
+                              >
+                                <svg viewBox="0 0 24 24" aria-hidden="true">
+                                  <path
+                                    d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-linecap="round"
+                                    stroke-linejoin="round"
+                                    stroke-width="1.6"
+                                  />
+                                </svg>
+                              </button>
                             </div>
                           </div>
                           <div class="detail-grid">
-                            {([
-                              ["Email", "email", identity().email],
-                              ["Phone", "phone", identity().phone],
-                              ["Address", "address", identity().address],
-                              ["NINO", "nino", identity().nino],
-                              ["NHS Number", "nhsNumber", identity().nhsNumber],
-                              ["Pass No", "passNumber", identity().passNumber],
-                            ] as [string, string, string][]).map(([label, key, value]) => (
-                              <div
-                                class={`copyable-field ${value.trim() ? "" : "empty"}`}
-                                onClick={() => void handleCopyField(value, key)}
-                                title={value.trim() ? "Click to copy" : undefined}
-                              >
-                                <span class="meta-label">{label}</span>
-                                <p>{value.trim() || "Not provided"}</p>
-                                <Show when={value.trim()}>
-                                  <span class={`copied-badge ${copiedField() === key ? "visible" : ""}`}>
-                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                                    Copied
-                                  </span>
-                                </Show>
-                              </div>
-                            ))}
+                            <For each={IDENTITY_DETAIL_FIELDS}>
+                              {(fieldDef) => {
+                                const value = () => identity()[fieldDef.field] as string;
+                                return (
+                                  <div
+                                    class={`copyable-field ${value().trim() ? "" : "empty"}`}
+                                    onClick={() => void handleCopyField(value(), fieldDef.field)}
+                                    title={value().trim() ? "Click to copy" : undefined}
+                                  >
+                                    <span class="meta-label">{fieldDef.label}</span>
+                                    <p>{value().trim() || "Not provided"}</p>
+                                    <Show when={value().trim()}>
+                                      <span class={`copied-badge ${copiedField() === fieldDef.field ? "visible" : ""}`}>
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
+                                        Copied
+                                      </span>
+                                    </Show>
+                                  </div>
+                                );
+                              }}
+                            </For>
                             <div>
                               <span class="meta-label">Notes</span>
                               <p class="notes-content">
-                                {identity().notes.trim().length > 0
-                                  ? identity().notes
-                                  : "Not provided"}
+                                {identity().notes.trim() || "Not provided"}
                               </p>
                             </div>
                           </div>
@@ -1265,6 +1335,19 @@ export default function App() {
                             }))
                           }
                           required
+                        />
+                      </label>
+                      <label class="field">
+                        <span class="field-label">Service</span>
+                        <input
+                          type="text"
+                          value={apiKeyDraft().service}
+                          onInput={(event) =>
+                            setApiKeyDraft((current) => ({
+                              ...current,
+                              service: event.currentTarget.value,
+                            }))
+                          }
                         />
                       </label>
                       <label class="field full">

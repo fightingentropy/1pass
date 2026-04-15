@@ -9,32 +9,38 @@ export type Env = {
       };
     };
   };
+  ALLOWED_ORIGIN?: string;
 };
 
 export const DEFAULT_VAULT_ID = "default";
-export const CORS_HEADERS = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,POST,OPTIONS",
-  "access-control-allow-headers": "content-type",
-};
 
-export function jsonResponse(data: unknown, init: ResponseInit = {}) {
+export function getCorsHeaders(env?: Env): Record<string, string> {
+  const origin = env?.ALLOWED_ORIGIN;
+  if (!origin) return {};
+  return {
+    "access-control-allow-origin": origin,
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "content-type",
+  };
+}
+
+export function jsonResponse(data: unknown, env?: Env, init: ResponseInit = {}) {
   return new Response(JSON.stringify(data), {
     ...init,
     headers: {
       "content-type": "application/json",
-      ...CORS_HEADERS,
+      ...getCorsHeaders(env),
       ...(init.headers ?? {}),
     },
   });
 }
 
-export function errorResponse(message: string, status = 400) {
-  return jsonResponse({ error: message }, { status });
+export function errorResponse(message: string, status = 400, env?: Env) {
+  return jsonResponse({ error: message }, env, { status });
 }
 
-export function optionsResponse() {
-  return new Response(null, { status: 204, headers: CORS_HEADERS });
+export function optionsResponse(env?: Env) {
+  return new Response(null, { status: 204, headers: getCorsHeaders(env) });
 }
 
 export function getDb(env: Env) {

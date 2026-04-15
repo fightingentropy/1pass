@@ -8,8 +8,8 @@ import {
 } from "./shared";
 import type { Env } from "./shared";
 
-export function onRequestOptions() {
-  return optionsResponse();
+export function onRequestOptions({ env }: { env: Env }) {
+  return optionsResponse(env);
 }
 
 export async function onRequestPost({
@@ -22,7 +22,7 @@ export async function onRequestPost({
   try {
     const body = await request.json().catch(() => null);
     if (!body || typeof body.payload !== "object" || body.payload === null) {
-      return errorResponse("Invalid payload.", 400);
+      return errorResponse("Invalid payload.", 400, env);
     }
 
     const db = getDb(env);
@@ -33,7 +33,7 @@ export async function onRequestPost({
       .first();
 
     if (existing) {
-      return errorResponse("Vault already exists.", 409);
+      return errorResponse("Vault already exists.", 409, env);
     }
 
     await db
@@ -43,9 +43,9 @@ export async function onRequestPost({
       .bind(DEFAULT_VAULT_ID, JSON.stringify(body.payload), Date.now())
       .run();
 
-    return jsonResponse({ ok: true });
+    return jsonResponse({ ok: true }, env);
   } catch (error) {
     console.error("Vault init error", error);
-    return errorResponse("Unable to initialize vault.", 500);
+    return errorResponse("Unable to initialize vault.", 500, env);
   }
 }

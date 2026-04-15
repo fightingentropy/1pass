@@ -8,8 +8,8 @@ import {
 } from "./shared";
 import type { Env } from "./shared";
 
-export function onRequestOptions() {
-  return optionsResponse();
+export function onRequestOptions({ env }: { env: Env }) {
+  return optionsResponse(env);
 }
 
 export async function onRequestGet({ env }: { env: Env }) {
@@ -22,7 +22,7 @@ export async function onRequestGet({ env }: { env: Env }) {
       .first<{ payload: string }>();
 
     if (!row?.payload) {
-      return errorResponse("Vault not initialized.", 404);
+      return errorResponse("Vault not initialized.", 404, env);
     }
 
     let payload: unknown = null;
@@ -30,12 +30,12 @@ export async function onRequestGet({ env }: { env: Env }) {
       payload = JSON.parse(row.payload);
     } catch (parseError) {
       console.error("Vault payload parse error", parseError);
-      return errorResponse("Vault data is corrupted.", 500);
+      return errorResponse("Vault data is corrupted.", 500, env);
     }
 
-    return jsonResponse({ payload });
+    return jsonResponse({ payload }, env);
   } catch (error) {
     console.error("Vault load error", error);
-    return errorResponse("Unable to load vault.", 500);
+    return errorResponse("Unable to load vault.", 500, env);
   }
 }

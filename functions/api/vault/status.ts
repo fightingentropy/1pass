@@ -8,8 +8,8 @@ import {
 } from "./shared";
 import type { Env } from "./shared";
 
-export function onRequestOptions() {
-  return optionsResponse();
+export function onRequestOptions({ env }: { env: Env }) {
+  return optionsResponse(env);
 }
 
 export async function onRequestGet({ env }: { env: Env }) {
@@ -21,9 +21,9 @@ export async function onRequestGet({ env }: { env: Env }) {
       .bind(DEFAULT_VAULT_ID)
       .first();
 
-    return jsonResponse({ exists: Boolean(row) });
+    return jsonResponse({ exists: Boolean(row) }, env);
   } catch (error) {
     console.error("Vault status error", error);
-    return errorResponse("Unable to check vault status.", 500);
+    return errorResponse("Unable to check vault status.", 500, env);
   }
 }
