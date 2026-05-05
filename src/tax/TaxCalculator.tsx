@@ -147,6 +147,15 @@ export default function TaxCalculator() {
       lumpSumAllowance: { ...prev.lumpSumAllowance, [key]: value },
     }));
 
+  const updateHICBC = <K extends keyof CalculatorInput["hicbc"]>(
+    key: K,
+    value: CalculatorInput["hicbc"][K],
+  ) =>
+    setInput((prev) => ({
+      ...prev,
+      hicbc: { ...prev.hicbc, [key]: value },
+    }));
+
   const resetBands = () =>
     setInput((prev) => ({ ...prev, bands: { ...DEFAULT_INPUT.bands } }));
   const resetScottishBands = () =>
@@ -168,6 +177,8 @@ export default function TaxCalculator() {
       ...prev,
       lumpSumAllowance: { ...DEFAULT_INPUT.lumpSumAllowance },
     }));
+  const resetHICBC = () =>
+    setInput((prev) => ({ ...prev, hicbc: { ...DEFAULT_INPUT.hicbc } }));
 
   const effectiveInput = createMemo<CalculatorInput>(() => {
     const base = input();
@@ -1033,6 +1044,23 @@ export default function TaxCalculator() {
                   }
                 />
               </label>
+              <label class="field">
+                <span class="field-label">Carry-forward (prior 3 years)</span>
+                <input
+                  type="number"
+                  value={input().annualAllowance.carryForwardUnused}
+                  onInput={(e) =>
+                    updateAA(
+                      "carryForwardUnused",
+                      FALLBACK(e.currentTarget.value, 0),
+                    )
+                  }
+                />
+                <span class="field-hint">
+                  Unused AA from up to 3 prior tax years. Doesn't apply once MPAA
+                  is triggered.
+                </span>
+              </label>
             </div>
             <div class="tax-row-actions">
               <button class="btn ghost" type="button" onClick={resetAA}>
@@ -1080,6 +1108,82 @@ export default function TaxCalculator() {
             <div class="tax-row-actions">
               <button class="btn ghost" type="button" onClick={resetLSA}>
                 Reset LSA defaults
+              </button>
+            </div>
+          </details>
+
+          <details class="tax-card tax-collapsible">
+            <summary>
+              <h2>Child Benefit &amp; HICBC</h2>
+              <span>
+                {input().hicbc.enabled ? "On" : "Off"}
+              </span>
+            </summary>
+            <label class="tax-checkbox">
+              <input
+                type="checkbox"
+                checked={input().hicbc.enabled}
+                onChange={(e) =>
+                  updateHICBC("enabled", e.currentTarget.checked)
+                }
+              />
+              <span>Apply the High Income Child Benefit Charge</span>
+            </label>
+            <div class="tax-grid">
+              <label class="field">
+                <span class="field-label">Annual child benefit received</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={10}
+                  value={input().hicbc.childBenefitAnnual}
+                  onInput={(e) =>
+                    updateHICBC(
+                      "childBenefitAnnual",
+                      FALLBACK(e.currentTarget.value, 0),
+                    )
+                  }
+                />
+                <span class="field-hint">
+                  2024–25: ~£1,331/yr for 1 child, £2,213/yr for 2, +£882/yr per
+                  extra child.
+                </span>
+              </label>
+              <label class="field">
+                <span class="field-label">Threshold (charge starts)</span>
+                <input
+                  type="number"
+                  value={input().hicbc.thresholdLow}
+                  onInput={(e) =>
+                    updateHICBC(
+                      "thresholdLow",
+                      FALLBACK(e.currentTarget.value, 0),
+                    )
+                  }
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Ceiling (full claw-back)</span>
+                <input
+                  type="number"
+                  value={input().hicbc.thresholdHigh}
+                  onInput={(e) =>
+                    updateHICBC(
+                      "thresholdHigh",
+                      FALLBACK(e.currentTarget.value, 0),
+                    )
+                  }
+                />
+              </label>
+            </div>
+            <div class="tax-banner info">
+              Adjusted Net Income excludes RAS and NPA pension contributions, so
+              SIPP / workplace pension contributions can pull you back below the
+              threshold and recover lost child benefit.
+            </div>
+            <div class="tax-row-actions">
+              <button class="btn ghost" type="button" onClick={resetHICBC}>
+                Reset HICBC defaults
               </button>
             </div>
           </details>
@@ -1242,17 +1346,34 @@ export default function TaxCalculator() {
             <h2>Annual Allowance</h2>
             <dl class="tax-defs">
               <div>
-                <dt>Allowance for this year</dt>
+                <dt>This year's AA</dt>
                 <dd>
-                  <strong>
-                    {formatCurrency(result().contribution.annualAllowance.limit)}
-                  </strong>{" "}
+                  {formatCurrency(result().contribution.annualAllowance.baseLimit)}{" "}
                   <Show when={result().contribution.annualAllowance.mpaaActive}>
                     <span class="muted">(MPAA)</span>
                   </Show>
                   <Show when={result().contribution.annualAllowance.tapered}>
                     <span class="muted">(tapered)</span>
                   </Show>
+                </dd>
+              </div>
+              <Show when={result().contribution.annualAllowance.carryForward > 0}>
+                <div>
+                  <dt>Carried forward from prior years</dt>
+                  <dd>
+                    +
+                    {formatCurrency(
+                      result().contribution.annualAllowance.carryForward,
+                    )}
+                  </dd>
+                </div>
+              </Show>
+              <div class="total">
+                <dt>Total available</dt>
+                <dd>
+                  <strong>
+                    {formatCurrency(result().contribution.annualAllowance.limit)}
+                  </strong>
                 </dd>
               </div>
               <div>
@@ -1398,6 +1519,23 @@ export default function TaxCalculator() {
                       {formatCurrency(result().scenarioWithSipp.class4NI)}
                     </td>
                     <td class="muted">—</td>
+                  </tr>
+                </Show>
+                <Show when={input().hicbc.enabled}>
+                  <tr>
+                    <th scope="row">HICBC (child benefit charge)</th>
+                    <td>
+                      {formatCurrency(result().scenarioWithoutSipp.hicbc)}
+                    </td>
+                    <td>
+                      {formatCurrency(result().scenarioWithSipp.hicbc)}
+                    </td>
+                    <td>
+                      {formatSignedCurrency(
+                        result().scenarioWithSipp.hicbc -
+                          result().scenarioWithoutSipp.hicbc,
+                      )}
+                    </td>
                   </tr>
                 </Show>
                 <Show when={isCIS()}>
@@ -1702,6 +1840,32 @@ export default function TaxCalculator() {
                   differently.
                 </li>
               </Show>
+              <Show
+                when={
+                  input().hicbc.enabled &&
+                  result().scenarioWithoutSipp.hicbc >
+                    result().scenarioWithSipp.hicbc
+                }
+              >
+                <li>
+                  HICBC drops from{" "}
+                  <strong>
+                    {formatCurrency(result().scenarioWithoutSipp.hicbc)}
+                  </strong>{" "}
+                  to{" "}
+                  <strong>
+                    {formatCurrency(result().scenarioWithSipp.hicbc)}
+                  </strong>{" "}
+                  — your SIPP contribution recovers{" "}
+                  <strong>
+                    {formatCurrency(
+                      result().scenarioWithoutSipp.hicbc -
+                        result().scenarioWithSipp.hicbc,
+                    )}
+                  </strong>{" "}
+                  of child benefit by reducing adjusted net income.
+                </li>
+              </Show>
               <Show when={result().withdrawal.totalPot > 0}>
                 <li>
                   Later, you could take{" "}
@@ -1779,9 +1943,15 @@ export default function TaxCalculator() {
                 April 2024.
               </li>
               <li>
+                <strong>HICBC:</strong> child benefit is clawed back when adjusted
+                net income exceeds the threshold (£60k since April 2024) and is
+                fully gone by the ceiling (£80k). Pension contributions reduce ANI
+                — a cheap way to recover lost benefit if you've got kids.
+              </li>
+              <li>
                 This is an estimate. It does not model dividend / savings income,
-                the High Income Child Benefit Charge, marriage allowance, or
-                carry-forward of unused AA from prior years.
+                marriage allowance, Scottish/Welsh-specific NI quirks, or the
+                pension Death Benefit Allowance.
               </li>
             </ul>
           </div>

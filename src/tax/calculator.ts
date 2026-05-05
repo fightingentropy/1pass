@@ -127,6 +127,7 @@ export type AnnualAllowanceConfig = {
   taperStart: number;
   taperRate: number;
   minimum: number;
+  carryForwardUnused: number;   // unused AA from up to 3 prior years
 };
 
 export const DEFAULT_ANNUAL_ALLOWANCE: AnnualAllowanceConfig = {
@@ -136,6 +137,7 @@ export const DEFAULT_ANNUAL_ALLOWANCE: AnnualAllowanceConfig = {
   taperStart: 260_000,
   taperRate: 0.5,
   minimum: 10_000,
+  carryForwardUnused: 0,
 };
 
 // Lump Sum Allowance: post-LTA cap on tax-free pension lump sums (most people:
@@ -149,6 +151,37 @@ export const DEFAULT_LUMP_SUM_ALLOWANCE: LumpSumAllowanceConfig = {
   cap: 268_275,
   alreadyUsed: 0,
 };
+
+// High Income Child Benefit Charge: claws back child benefit when adjusted net
+// income exceeds the threshold. From April 2024 the charge starts at £60k and
+// fully claws back at £80k. Pension contributions reduce ANI, so making a SIPP
+// contribution can preserve some/all of the benefit.
+export type HICBCConfig = {
+  enabled: boolean;
+  childBenefitAnnual: number;   // total annual child benefit received
+  thresholdLow: number;          // ANI at which charge begins
+  thresholdHigh: number;         // ANI at which charge = 100%
+};
+
+export const DEFAULT_HICBC: HICBCConfig = {
+  enabled: false,
+  childBenefitAnnual: 0,
+  thresholdLow: 60_000,
+  thresholdHigh: 80_000,
+};
+
+export function calculateHICBC(
+  adjustedNetIncome: number,
+  config: HICBCConfig,
+): number {
+  if (!config.enabled) return 0;
+  const benefit = Math.max(0, config.childBenefitAnnual);
+  if (benefit === 0) return 0;
+  if (adjustedNetIncome <= config.thresholdLow) return 0;
+  if (adjustedNetIncome >= config.thresholdHigh) return benefit;
+  const range = Math.max(1, config.thresholdHigh - config.thresholdLow);
+  return benefit * ((adjustedNetIncome - config.thresholdLow) / range);
+}
 
 export type CalculatorInput = {
   mode: EmploymentMode;
@@ -169,6 +202,7 @@ export type CalculatorInput = {
   includeClass4NI: boolean;
   annualAllowance: AnnualAllowanceConfig;
   lumpSumAllowance: LumpSumAllowanceConfig;
+  hicbc: HICBCConfig;
   potValue: number;
   taxFreeLumpSumPercent: number;
   annualWithdrawal: number;
@@ -196,6 +230,7 @@ export const DEFAULT_INPUT: CalculatorInput = {
   includeClass4NI: true,
   annualAllowance: { ...DEFAULT_ANNUAL_ALLOWANCE },
   lumpSumAllowance: { ...DEFAULT_LUMP_SUM_ALLOWANCE },
+  hicbc: { ...DEFAULT_HICBC },
   potValue: 100_000,
   taxFreeLumpSumPercent: 0.25,
   annualWithdrawal: 12_000,
@@ -401,6 +436,8 @@ export type ScenarioBreakdown = {
   cisDeducted: number;
   refundOrBalance: number;
   pensionOutOfPocket: number;
+  adjustedNetIncome: number;        // for HICBC and PA taper context
+  hicbc: number;                    // High Income Child Benefit Charge
   netCashPosition: number;
   inHigherBand: boolean;            // any income above the relief rate
 };
@@ -459,7 +496,17 @@ function computeScenario(
       ? Math.max(0, input.grossIncome) * Math.max(0, input.cisDeductionRate)
       : 0;
 
-  const refundOrBalance = incomeTax.total - cisDeducted;
+  // HICBC uses adjusted net income: taxable income MINUS gross RAS-style
+  // pension contributions (NPA/SS already reduce taxable income directly).
+  let adjustedNetIncome = taxableIncome;
+  if (
+    contribution &&
+    (input.contributionMethod === "ras" || input.contributionMethod === "sipp")
+  ) {
+    adjustedNetIncome = Math.max(0, taxableIncome - contribution.grossContribution);
+  }
+  const hicbc = calculateHICBC(adjustedNetIncome, input.hicbc);
+  const refundOrBalance = incomeTax.total + hicbc - cisDeducted;
 
   const netCashPosition =
     input.grossIncome -
@@ -467,6 +514,7 @@ function computeScenario(
     incomeTax.total -
     nationalInsurance -
     class4NI -
+    hicbc -
     pensionOutOfPocket;
 
   return {
@@ -480,6 +528,8 @@ function computeScenario(
     cisDeducted,
     refundOrBalance,
     pensionOutOfPocket,
+    adjustedNetIncome,
+    hicbc,
     netCashPosition,
     inHigherBand: incomeTax.topMarginalRate > regime.reliefRate,
   };
@@ -511,7 +561,9 @@ function computeHigherRateRelief(
 }
 
 export type AnnualAllowanceUsage = {
-  limit: number;
+  baseLimit: number;        // current-year AA before carry-forward
+  carryForward: number;     // unused AA carried forward from prior years
+  limit: number;            // total available = baseLimit + carryForward
   used: number;
   remaining: number;
   excess: number;
@@ -526,11 +578,16 @@ function computeAnnualAllowance(
   employerContribution: number,
 ): AnnualAllowanceUsage {
   const used = contribution.grossContribution + employerContribution;
+  const carryForward = Math.max(0, input.annualAllowance.carryForwardUnused);
 
   if (input.annualAllowance.mpaaActive) {
-    const limit = input.annualAllowance.mpaaLimit;
+    // Carry-forward does NOT apply once MPAA is triggered.
+    const baseLimit = input.annualAllowance.mpaaLimit;
+    const limit = baseLimit;
     const excess = Math.max(0, used - limit);
     return {
+      baseLimit,
+      carryForward: 0,
       limit,
       used,
       remaining: Math.max(0, limit - used),
@@ -545,21 +602,24 @@ function computeAnnualAllowance(
   // contribution. We don't model salary-sacrificed contributions added back —
   // a simplification, but close enough for ballpark figures.
   const adjustedIncome = input.grossIncome + employerContribution;
-  let limit = input.annualAllowance.regularLimit;
+  let baseLimit = input.annualAllowance.regularLimit;
   let tapered = false;
   if (adjustedIncome > input.annualAllowance.taperStart) {
     const reduction =
       (adjustedIncome - input.annualAllowance.taperStart) *
       input.annualAllowance.taperRate;
-    limit = Math.max(
+    baseLimit = Math.max(
       input.annualAllowance.minimum,
       input.annualAllowance.regularLimit - reduction,
     );
     tapered = true;
   }
 
+  const limit = baseLimit + carryForward;
   const excess = Math.max(0, used - limit);
   return {
+    baseLimit,
+    carryForward,
     limit,
     used,
     remaining: Math.max(0, limit - used),

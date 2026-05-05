@@ -242,6 +242,90 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   checkBool("MPAA flag", r.contribution.annualAllowance.mpaaActive, true);
 }
 
+// Case 9 — Carry-forward extends the AA limit.
+{
+  console.log("\nCase 9: AA + £30k carry-forward");
+  const input: CalculatorInput = {
+    ...DEFAULT_INPUT,
+    contributionMethod: "sipp",
+    contributionBasis: "gross",
+    contributionAmount: 80_000,
+    employerContributionPercent: 0,
+    annualAllowance: {
+      ...DEFAULT_INPUT.annualAllowance,
+      carryForwardUnused: 30_000,
+    },
+  };
+  const r = calculate(input);
+
+  check("AA base limit", r.contribution.annualAllowance.baseLimit, 60_000);
+  check("AA carry-forward", r.contribution.annualAllowance.carryForward, 30_000);
+  check("AA total available", r.contribution.annualAllowance.limit, 90_000);
+  check("AA used", r.contribution.annualAllowance.used, 80_000);
+  checkBool("AA exceeded", r.contribution.annualAllowance.exceeded, false);
+}
+
+// Case 10 — HICBC: £75k earner with 2 kids; SIPP recovers part of the benefit.
+{
+  console.log("\nCase 10: HICBC — £75k, 2 kids, £5k RAS gross recovers benefit");
+  const input: CalculatorInput = {
+    ...DEFAULT_INPUT,
+    mode: "employed",
+    grossIncome: 75_000,
+    contributionMethod: "ras",
+    contributionBasis: "gross",
+    contributionAmount: 5_000,
+    employerContributionPercent: 0,
+    includeNI: false,
+    hicbc: {
+      enabled: true,
+      childBenefitAnnual: 2_212.60,
+      thresholdLow: 60_000,
+      thresholdHigh: 80_000,
+    },
+  };
+  const r = calculate(input);
+
+  // Without SIPP: ANI = £75,000. Charge fraction = (75,000 - 60,000) / 20,000 = 0.75
+  // HICBC = 0.75 × £2,212.60 = £1,659.45
+  // With SIPP: gross contribution £5,000 reduces ANI to £70,000. Fraction = 0.5
+  // HICBC = 0.5 × £2,212.60 = £1,106.30
+  // SIPP recovers £553.15 of child benefit on top of normal HR relief.
+  check("ANI without SIPP", r.scenarioWithoutSipp.adjustedNetIncome, 75_000);
+  check("ANI with SIPP", r.scenarioWithSipp.adjustedNetIncome, 70_000);
+  check("HICBC without SIPP", r.scenarioWithoutSipp.hicbc, 1_659.45, 0.05);
+  check("HICBC with SIPP", r.scenarioWithSipp.hicbc, 1_106.30, 0.05);
+  check(
+    "Child benefit recovered by SIPP",
+    r.scenarioWithoutSipp.hicbc - r.scenarioWithSipp.hicbc,
+    553.15,
+    0.05,
+  );
+}
+
+// Case 11 — HICBC ceiling: full claw-back at/above £80k.
+{
+  console.log("\nCase 11: HICBC — £85k income, no SIPP, full claw-back");
+  const input: CalculatorInput = {
+    ...DEFAULT_INPUT,
+    mode: "employed",
+    grossIncome: 85_000,
+    contributionAmount: 0,
+    employerContributionPercent: 0,
+    includeNI: false,
+    hicbc: {
+      enabled: true,
+      childBenefitAnnual: 1_331.20,
+      thresholdLow: 60_000,
+      thresholdHigh: 80_000,
+    },
+  };
+  const r = calculate(input);
+
+  check("HICBC without SIPP", r.scenarioWithoutSipp.hicbc, 1_331.20, 0.05);
+  check("HICBC with SIPP", r.scenarioWithSipp.hicbc, 1_331.20, 0.05);
+}
+
 console.log(allPass ? "\nAll cases passed." : "\nSome checks failed — see above.");
 if (!allPass) {
   throw new Error("Sanity check failed");
