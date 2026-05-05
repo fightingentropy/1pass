@@ -1083,3 +1083,412 @@ body::after {
         padding: 20px;
     }
 }
+
+/* Tax calculator page (/tax) */
+.tax-page {
+    width: min(1200px, 100%);
+    margin: 0 auto;
+    padding: clamp(20px, 4vw, 48px);
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+}
+
+.tax-header {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.tax-header h1 {
+    margin: 0;
+    font-size: clamp(28px, 4.5vw, 40px);
+    font-weight: 700;
+    letter-spacing: -0.025em;
+}
+
+.tax-header .subtitle {
+    max-width: 720px;
+}
+
+.tax-back {
+    align-self: flex-start;
+    color: var(--muted);
+    font-size: 13px;
+    text-decoration: none;
+    padding: 6px 0;
+    transition: color 0.18s;
+}
+
+.tax-back:hover {
+    color: var(--foreground);
+}
+
+.tax-warning {
+    margin-top: 4px;
+    padding: 14px 16px;
+    border-radius: 14px;
+    background: #2a1a05;
+    border: 1px solid #4a2f0c;
+    color: #fde68a;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.tax-warning strong {
+    color: #fef3c7;
+}
+
+.tax-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+}
+
+.tax-inputs,
+.tax-results {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+}
+
+.tax-card {
+    padding: 22px;
+    border-radius: 22px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.tax-card h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.015em;
+}
+
+.tax-card.highlight {
+    background: linear-gradient(180deg, #131318 0%, #0a0a0a 100%);
+    border-color: #2f2f34;
+}
+
+.tax-collapsible[open] > summary > h2,
+.tax-collapsible > summary {
+    cursor: pointer;
+}
+
+.tax-collapsible > summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0;
+    margin: 0;
+}
+
+.tax-collapsible > summary::-webkit-details-marker {
+    display: none;
+}
+
+.tax-collapsible > summary::after {
+    content: "+";
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--muted);
+    transition: transform 0.18s;
+}
+
+.tax-collapsible[open] > summary::after {
+    transform: rotate(45deg);
+}
+
+.tax-collapsible > summary span {
+    color: var(--muted);
+    font-size: 12px;
+    margin-left: auto;
+    margin-right: 12px;
+    font-weight: 400;
+}
+
+.tax-collapsible > *:not(summary) {
+    margin-top: 16px;
+}
+
+.tax-mode-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+}
+
+.tax-mode {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-start;
+    text-align: left;
+    padding: 14px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: #111114;
+    color: var(--foreground);
+    cursor: pointer;
+    transition: background 0.18s, border-color 0.18s;
+    font-family: inherit;
+}
+
+.tax-mode strong {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.tax-mode span {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+}
+
+.tax-mode:hover {
+    background: #161619;
+    border-color: #3f3f46;
+}
+
+.tax-mode.active {
+    background: #1f1f23;
+    border-color: #5e5e66;
+    box-shadow: inset 0 0 0 1px rgba(244, 244, 245, 0.04);
+}
+
+.tax-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 14px;
+}
+
+.tax-page .field input,
+.tax-page .field select {
+    border-radius: 12px;
+    border: 1px solid var(--input);
+    padding: 10px 12px;
+    font-size: 14px;
+    font-family: inherit;
+    background: #0f0f10;
+    color: var(--foreground);
+}
+
+.tax-page .field select {
+    appearance: none;
+    background-image:
+        linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+        linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position:
+        calc(100% - 16px) 14px,
+        calc(100% - 11px) 14px;
+    background-size:
+        5px 5px,
+        5px 5px;
+    background-repeat: no-repeat;
+    padding-right: 32px;
+}
+
+.tax-page .field input:focus,
+.tax-page .field select:focus {
+    outline: none;
+    border-color: var(--ring);
+    box-shadow: 0 0 0 3px rgba(9, 9, 11, 0.1);
+}
+
+.tax-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--foreground);
+    cursor: pointer;
+}
+
+.tax-checkbox input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+}
+
+.tax-row-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
+.tax-row-actions .btn {
+    padding: 8px 14px;
+    font-size: 13px;
+}
+
+.tax-defs {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin: 0;
+}
+
+.tax-defs > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid #18181b;
+}
+
+.tax-defs > div:last-child {
+    border-bottom: none;
+}
+
+.tax-defs dt {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+.tax-defs dd {
+    margin: 0;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 500;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.tax-defs dd strong {
+    font-size: 17px;
+    font-weight: 700;
+}
+
+.tax-defs > div.total {
+    padding: 14px 0 12px;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    margin: 4px 0;
+}
+
+.tax-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+}
+
+.tax-table thead th {
+    text-align: right;
+    padding: 10px 12px;
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    border-bottom: 1px solid var(--border);
+}
+
+.tax-table thead th:first-child {
+    text-align: left;
+}
+
+.tax-table tbody th {
+    text-align: left;
+    padding: 10px 12px;
+    font-weight: 500;
+    color: var(--muted-foreground);
+}
+
+.tax-table tbody td {
+    text-align: right;
+    padding: 10px 12px;
+    color: var(--foreground);
+    border-bottom: 1px solid #18181b;
+}
+
+.tax-table tbody tr:last-child td,
+.tax-table tbody tr:last-child th {
+    border-bottom: none;
+}
+
+.tax-table tbody tr.total-row th,
+.tax-table tbody tr.total-row td {
+    background: #111114;
+    font-weight: 700;
+    color: var(--foreground);
+}
+
+.tax-table .muted {
+    color: var(--muted);
+}
+
+.tax-banner {
+    margin-top: 4px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+.tax-banner.info {
+    background: #0a1f1a;
+    border: 1px solid #14523d;
+    color: #bbf7d0;
+}
+
+.tax-banner.warn {
+    background: #2a1a05;
+    border: 1px solid #4a2f0c;
+    color: #fde68a;
+}
+
+.tax-summary,
+.tax-notes {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    color: var(--muted-foreground);
+    line-height: 1.55;
+    font-size: 14px;
+}
+
+.tax-summary strong {
+    color: var(--foreground);
+    font-variant-numeric: tabular-nums;
+}
+
+.tax-notes em {
+    color: var(--foreground);
+    font-style: italic;
+}
+
+@media (max-width: 980px) {
+    .tax-layout {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 640px) {
+    .tax-card {
+        padding: 18px;
+    }
+
+    .tax-table {
+        font-size: 13px;
+    }
+
+    .tax-table thead th,
+    .tax-table tbody th,
+    .tax-table tbody td {
+        padding: 8px 6px;
+    }
+}
