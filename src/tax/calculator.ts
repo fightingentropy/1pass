@@ -14,16 +14,29 @@ export type ContributionMethod =
 
 export type ContributionBasis = "net" | "gross";
 
+export type Jurisdiction = "rUK" | "scotland";
+
+// Generic income-tax regime — works for any number of brackets.
+export type TaxBracket = { upperBound: number; rate: number };
+export type TaxRegime = {
+  personalAllowance: number;
+  paTaperStart: number;
+  paTaperRate: number;
+  brackets: TaxBracket[];   // ordered ascending by upperBound; final upperBound = Infinity
+  reliefRate: number;       // RAS basic-rate relief (0.20 in UK, even for Scottish residents)
+};
+
+// rUK 3-band shape (England / Wales / NI). Editable in the UI.
 export type TaxBands = {
   personalAllowance: number;
-  basicRateThreshold: number;        // income at which basic rate begins (= PA in UK)
-  higherRateThreshold: number;       // income at which higher rate begins
-  additionalRateThreshold: number;   // income at which additional rate begins
-  basicRate: number;                 // 0..1
-  higherRate: number;                // 0..1
-  additionalRate: number;            // 0..1
-  paTaperStart: number;              // income at which PA begins to taper (UK: £100k)
-  paTaperRate: number;               // 0..1 — fraction of PA lost per £1 over taper start
+  basicRateThreshold: number;
+  higherRateThreshold: number;
+  additionalRateThreshold: number;
+  basicRate: number;
+  higherRate: number;
+  additionalRate: number;
+  paTaperStart: number;
+  paTaperRate: number;
 };
 
 export const DEFAULT_TAX_BANDS: TaxBands = {
@@ -36,6 +49,41 @@ export const DEFAULT_TAX_BANDS: TaxBands = {
   additionalRate: 0.45,
   paTaperStart: 100_000,
   paTaperRate: 0.5,
+};
+
+// Scottish 6-band shape. PA still UK-wide; bands and rates are Scotland-specific.
+export type ScottishBands = {
+  personalAllowance: number;
+  paTaperStart: number;
+  paTaperRate: number;
+  starterRateUpper: number;
+  basicRateUpper: number;
+  intermediateRateUpper: number;
+  higherRateUpper: number;
+  advancedRateUpper: number;
+  starterRate: number;
+  basicRate: number;
+  intermediateRate: number;
+  higherRate: number;
+  advancedRate: number;
+  topRate: number;
+};
+
+export const DEFAULT_SCOTTISH_BANDS: ScottishBands = {
+  personalAllowance: 12_570,
+  paTaperStart: 100_000,
+  paTaperRate: 0.5,
+  starterRateUpper: 15_397,
+  basicRateUpper: 27_491,
+  intermediateRateUpper: 43_662,
+  higherRateUpper: 75_000,
+  advancedRateUpper: 125_140,
+  starterRate: 0.19,
+  basicRate: 0.2,
+  intermediateRate: 0.21,
+  higherRate: 0.42,
+  advancedRate: 0.45,
+  topRate: 0.48,
 };
 
 export type NIBands = {
@@ -52,21 +100,77 @@ export const DEFAULT_NI_BANDS: NIBands = {
   upperRate: 0.02,
 };
 
+// Self-employed Class 4 NI — paid on profit, not reduced by personal pension
+// contributions. Class 2 (£3.45/wk) was made non-compulsory for most from 2024
+// so we don't model it here.
+export type Class4NIBands = {
+  lowerLimit: number;
+  upperLimit: number;
+  mainRate: number;
+  upperRate: number;
+};
+
+export const DEFAULT_CLASS4_NI: Class4NIBands = {
+  lowerLimit: 12_570,
+  upperLimit: 50_270,
+  mainRate: 0.06,
+  upperRate: 0.02,
+};
+
+// Annual Allowance: cap on tax-relievable pension contributions per year.
+// MPAA replaces the regular AA once you flexibly access taxable pension income.
+// Adjusted income above taperStart reduces the AA toward `minimum`.
+export type AnnualAllowanceConfig = {
+  regularLimit: number;
+  mpaaActive: boolean;
+  mpaaLimit: number;
+  taperStart: number;
+  taperRate: number;
+  minimum: number;
+};
+
+export const DEFAULT_ANNUAL_ALLOWANCE: AnnualAllowanceConfig = {
+  regularLimit: 60_000,
+  mpaaActive: false,
+  mpaaLimit: 10_000,
+  taperStart: 260_000,
+  taperRate: 0.5,
+  minimum: 10_000,
+};
+
+// Lump Sum Allowance: post-LTA cap on tax-free pension lump sums (most people:
+// £268,275 lifetime). Applies across all pension pots.
+export type LumpSumAllowanceConfig = {
+  cap: number;
+  alreadyUsed: number;
+};
+
+export const DEFAULT_LUMP_SUM_ALLOWANCE: LumpSumAllowanceConfig = {
+  cap: 268_275,
+  alreadyUsed: 0,
+};
+
 export type CalculatorInput = {
   mode: EmploymentMode;
   grossIncome: number;
-  businessExpenses: number;          // self-employed/CIS only
-  cisDeductionRate: number;          // 0..1 — CIS only
+  businessExpenses: number;
+  cisDeductionRate: number;
   contributionMethod: ContributionMethod;
   contributionBasis: ContributionBasis;
   contributionAmount: number;
-  employerContributionPercent: number;  // 0..100
-  employerMatchPercent: number;         // 0..100 — informational only
+  employerContributionPercent: number;
+  employerMatchPercent: number;
+  jurisdiction: Jurisdiction;
   bands: TaxBands;
+  scottishBands: ScottishBands;
   niBands: NIBands;
   includeNI: boolean;
+  class4NI: Class4NIBands;
+  includeClass4NI: boolean;
+  annualAllowance: AnnualAllowanceConfig;
+  lumpSumAllowance: LumpSumAllowanceConfig;
   potValue: number;
-  taxFreeLumpSumPercent: number;     // 0..1
+  taxFreeLumpSumPercent: number;
   annualWithdrawal: number;
   otherRetirementIncome: number;
   retirementPersonalAllowance: number;
@@ -83,9 +187,15 @@ export const DEFAULT_INPUT: CalculatorInput = {
   contributionAmount: 3_500,
   employerContributionPercent: 3,
   employerMatchPercent: 5,
+  jurisdiction: "rUK",
   bands: { ...DEFAULT_TAX_BANDS },
+  scottishBands: { ...DEFAULT_SCOTTISH_BANDS },
   niBands: { ...DEFAULT_NI_BANDS },
   includeNI: true,
+  class4NI: { ...DEFAULT_CLASS4_NI },
+  includeClass4NI: true,
+  annualAllowance: { ...DEFAULT_ANNUAL_ALLOWANCE },
+  lumpSumAllowance: { ...DEFAULT_LUMP_SUM_ALLOWANCE },
   potValue: 100_000,
   taxFreeLumpSumPercent: 0.25,
   annualWithdrawal: 12_000,
@@ -94,26 +204,70 @@ export const DEFAULT_INPUT: CalculatorInput = {
   age: 40,
 };
 
+// ---- Regime helpers ----
+
+export function rUKBandsToRegime(bands: TaxBands): TaxRegime {
+  return {
+    personalAllowance: bands.personalAllowance,
+    paTaperStart: bands.paTaperStart,
+    paTaperRate: bands.paTaperRate,
+    brackets: [
+      { upperBound: bands.higherRateThreshold, rate: bands.basicRate },
+      { upperBound: bands.additionalRateThreshold, rate: bands.higherRate },
+      { upperBound: Infinity, rate: bands.additionalRate },
+    ],
+    reliefRate: bands.basicRate,
+  };
+}
+
+export function scottishBandsToRegime(bands: ScottishBands): TaxRegime {
+  return {
+    personalAllowance: bands.personalAllowance,
+    paTaperStart: bands.paTaperStart,
+    paTaperRate: bands.paTaperRate,
+    brackets: [
+      { upperBound: bands.starterRateUpper, rate: bands.starterRate },
+      { upperBound: bands.basicRateUpper, rate: bands.basicRate },
+      { upperBound: bands.intermediateRateUpper, rate: bands.intermediateRate },
+      { upperBound: bands.higherRateUpper, rate: bands.higherRate },
+      { upperBound: bands.advancedRateUpper, rate: bands.advancedRate },
+      { upperBound: Infinity, rate: bands.topRate },
+    ],
+    // RAS providers claim 20% at source for Scottish residents too — Scottish
+    // taxpayers reconcile the difference (19% / 21% / 42% / 45% / 48%) via SA.
+    reliefRate: 0.2,
+  };
+}
+
+export function regimeFor(input: CalculatorInput): TaxRegime {
+  return input.jurisdiction === "scotland"
+    ? scottishBandsToRegime(input.scottishBands)
+    : rUKBandsToRegime(input.bands);
+}
+
 // PA tapers by £1 for every £2 over the taper start (UK default).
 export function effectivePersonalAllowance(
   adjustedNetIncome: number,
-  bands: TaxBands,
+  regime: TaxRegime,
 ): number {
-  if (adjustedNetIncome <= bands.paTaperStart) return bands.personalAllowance;
+  if (adjustedNetIncome <= regime.paTaperStart) return regime.personalAllowance;
   const reduction =
-    (adjustedNetIncome - bands.paTaperStart) * bands.paTaperRate;
-  return Math.max(0, bands.personalAllowance - reduction);
+    (adjustedNetIncome - regime.paTaperStart) * regime.paTaperRate;
+  return Math.max(0, regime.personalAllowance - reduction);
 }
+
+export type BracketBreakdown = {
+  rate: number;
+  amount: number;
+  tax: number;
+  upperBound: number;
+};
 
 export type IncomeTaxBreakdown = {
   total: number;
-  inBasic: number;
-  inHigher: number;
-  inAdditional: number;
   effectivePA: number;
-  basicTax: number;
-  higherTax: number;
-  additionalTax: number;
+  perBracket: BracketBreakdown[];
+  topMarginalRate: number;
 };
 
 export type IncomeTaxOptions = {
@@ -125,40 +279,57 @@ export type IncomeTaxOptions = {
 
 export function calculateIncomeTax(
   taxableIncome: number,
-  bands: TaxBands,
+  regime: TaxRegime,
   options: IncomeTaxOptions = {},
 ): IncomeTaxBreakdown {
   const effectivePA =
-    options.overridePA ?? effectivePersonalAllowance(taxableIncome, bands);
+    options.overridePA ?? effectivePersonalAllowance(taxableIncome, regime);
   const extension = options.bandExtension ?? 0;
 
-  const basicBandSize =
-    Math.max(0, bands.higherRateThreshold - bands.basicRateThreshold) +
-    extension;
-  const higherBandSize = Math.max(
-    0,
-    bands.additionalRateThreshold - bands.higherRateThreshold,
-  );
+  // Find the basic-rate bracket so we can extend it (and shift everything
+  // above it up by the same amount). For Scotland the relief bracket is the
+  // 20% band, not the starter rate.
+  let extensionStart = regime.brackets.findIndex((b) => b.rate === regime.reliefRate);
+  if (extensionStart < 0) extensionStart = 0;
 
-  const afterPA = Math.max(0, taxableIncome - effectivePA);
-  const inBasic = Math.min(afterPA, basicBandSize);
-  const remainingAfterBasic = afterPA - inBasic;
-  const inHigher = Math.min(remainingAfterBasic, higherBandSize);
-  const inAdditional = Math.max(0, remainingAfterBasic - inHigher);
+  const effectiveBrackets = regime.brackets.map((b, i) => ({
+    rate: b.rate,
+    upperBound:
+      i >= extensionStart && Number.isFinite(b.upperBound)
+        ? b.upperBound + extension
+        : b.upperBound,
+  }));
 
-  const basicTax = inBasic * bands.basicRate;
-  const higherTax = inHigher * bands.higherRate;
-  const additionalTax = inAdditional * bands.additionalRate;
+  let remaining = Math.max(0, taxableIncome - effectivePA);
+  let lowerBound = effectivePA;
+  let totalTax = 0;
+  const perBracket: BracketBreakdown[] = [];
+  let topMarginalRate = 0;
+
+  for (const b of effectiveBrackets) {
+    if (remaining <= 0) break;
+    const width = Math.max(0, b.upperBound - lowerBound);
+    const inThis = Math.min(remaining, width);
+    if (inThis > 0) {
+      const tax = inThis * b.rate;
+      perBracket.push({
+        rate: b.rate,
+        amount: inThis,
+        tax,
+        upperBound: b.upperBound,
+      });
+      totalTax += tax;
+      topMarginalRate = b.rate;
+      remaining -= inThis;
+    }
+    lowerBound = b.upperBound;
+  }
 
   return {
-    total: basicTax + higherTax + additionalTax,
-    inBasic,
-    inHigher,
-    inAdditional,
+    total: totalTax,
     effectivePA,
-    basicTax,
-    higherTax,
-    additionalTax,
+    perBracket,
+    topMarginalRate,
   };
 }
 
@@ -172,25 +343,36 @@ export function calculateNI(income: number, niBands: NIBands): number {
   return inMain * niBands.mainRate + inUpper * niBands.upperRate;
 }
 
+export function calculateClass4NI(
+  profit: number,
+  bands: Class4NIBands,
+): number {
+  if (profit <= bands.lowerLimit) return 0;
+  const inMain = Math.min(
+    profit - bands.lowerLimit,
+    Math.max(0, bands.upperLimit - bands.lowerLimit),
+  );
+  const inUpper = Math.max(0, profit - bands.upperLimit);
+  return inMain * bands.mainRate + inUpper * bands.upperRate;
+}
+
 export type ContributionBreakdown = {
-  netContribution: number;     // out-of-pocket from take-home (RAS/SIPP) or 0 conceptually
-  grossContribution: number;   // total reaching the pension pot from employee
-  governmentTopUp: number;     // explicit RAS basic-rate top-up; 0 for NPA/SS
+  netContribution: number;
+  grossContribution: number;
+  governmentTopUp: number;
 };
 
-// Resolves the user's input amount + basis + method into a fully-grossed-up
-// breakdown of net contribution / gross contribution / RAS top-up.
 export function resolveContribution(
   method: ContributionMethod,
   basis: ContributionBasis,
   amount: number,
-  basicRate: number,
+  reliefRate: number,
 ): ContributionBreakdown {
   const safe = Math.max(0, amount);
   if (method === "ras" || method === "sipp") {
     if (basis === "net") {
       const net = safe;
-      const gross = basicRate >= 1 ? net : net / (1 - basicRate);
+      const gross = reliefRate >= 1 ? net : net / (1 - reliefRate);
       return {
         netContribution: net,
         grossContribution: gross,
@@ -198,46 +380,44 @@ export function resolveContribution(
       };
     }
     const gross = safe;
-    const net = gross * (1 - basicRate);
+    const net = gross * (1 - reliefRate);
     return {
       netContribution: net,
       grossContribution: gross,
       governmentTopUp: gross - net,
     };
   }
-  // Net pay / salary sacrifice — entered amount is the gross pre-tax deduction.
-  return {
-    netContribution: safe,
-    grossContribution: safe,
-    governmentTopUp: 0,
-  };
+  return { netContribution: safe, grossContribution: safe, governmentTopUp: 0 };
 }
 
 export type ScenarioBreakdown = {
   grossIncome: number;
   businessExpenses: number;
-  taxableIncome: number;          // figure the income-tax calc was run against
+  taxableIncome: number;
   effectivePA: number;
   incomeTax: IncomeTaxBreakdown;
-  nationalInsurance: number;
+  nationalInsurance: number;        // employee Class 1
+  class4NI: number;                 // self-employed Class 4
   cisDeducted: number;
-  refundOrBalance: number;        // negative = refund due back, positive = balance owed
-  pensionOutOfPocket: number;     // money the user paid out of post/pre-tax pay
-  netCashPosition: number;        // cash the user keeps in their pocket after everything
-  inHigherBand: boolean;
+  refundOrBalance: number;
+  pensionOutOfPocket: number;
+  netCashPosition: number;
+  inHigherBand: boolean;            // any income above the relief rate
 };
 
 function computeScenario(
   input: CalculatorInput,
+  regime: TaxRegime,
   contribution: ContributionBreakdown | null,
 ): ScenarioBreakdown {
   const isSelfEmployedOrCIS =
     input.mode === "selfEmployed" || input.mode === "cis";
   const expenses = isSelfEmployedOrCIS ? Math.max(0, input.businessExpenses) : 0;
-
-  let grossForTax = isSelfEmployedOrCIS
+  const profitOrSalary = isSelfEmployedOrCIS
     ? input.grossIncome - expenses
     : input.grossIncome;
+
+  let grossForTax = profitOrSalary;
   let bandExtension = 0;
   let pensionOutOfPocket = 0;
   let niableAdjustment = 0;
@@ -253,21 +433,25 @@ function computeScenario(
         niableAdjustment = contribution.grossContribution;
       }
     } else {
-      // ras / sipp — gross contribution extends the basic-rate band.
       bandExtension = contribution.grossContribution;
       pensionOutOfPocket = contribution.netContribution;
     }
   }
 
   const taxableIncome = Math.max(0, grossForTax);
-  const incomeTax = calculateIncomeTax(taxableIncome, input.bands, {
-    bandExtension,
-  });
+  const incomeTax = calculateIncomeTax(taxableIncome, regime, { bandExtension });
 
   const niable = Math.max(0, input.grossIncome - niableAdjustment);
   const nationalInsurance =
     input.mode === "employed" && input.includeNI
       ? calculateNI(niable, input.niBands)
+      : 0;
+
+  // Class 4 NI: based on profit before any pension contribution. RAS doesn't
+  // reduce profit; NPA/SS aren't relevant for sole-trader personal SIPPs.
+  const class4NI =
+    isSelfEmployedOrCIS && input.includeClass4NI
+      ? calculateClass4NI(Math.max(0, profitOrSalary), input.class4NI)
       : 0;
 
   const cisDeducted =
@@ -282,6 +466,7 @@ function computeScenario(
     expenses -
     incomeTax.total -
     nationalInsurance -
+    class4NI -
     pensionOutOfPocket;
 
   return {
@@ -291,19 +476,20 @@ function computeScenario(
     effectivePA: incomeTax.effectivePA,
     incomeTax,
     nationalInsurance,
+    class4NI,
     cisDeducted,
     refundOrBalance,
     pensionOutOfPocket,
     netCashPosition,
-    inHigherBand: incomeTax.inHigher > 0 || incomeTax.inAdditional > 0,
+    inHigherBand: incomeTax.topMarginalRate > regime.reliefRate,
   };
 }
 
-// Self Assessment-claimable relief = tax saved by extending the basic-rate
-// band. The basic-rate piece is already claimed at source by the provider, so
-// what's left is the higher- and additional-rate uplift.
+// SA-claimable relief = total tax saved by extending the relief-rate band,
+// minus the basic-rate piece already claimed at source.
 function computeHigherRateRelief(
   input: CalculatorInput,
+  regime: TaxRegime,
   contribution: ContributionBreakdown,
 ): number {
   if (
@@ -313,64 +499,135 @@ function computeHigherRateRelief(
     return 0;
   }
 
-  const isSelfEmployedOrCIS =
-    input.mode === "selfEmployed" || input.mode === "cis";
-  const expenses = isSelfEmployedOrCIS ? Math.max(0, input.businessExpenses) : 0;
-  const grossForTax = isSelfEmployedOrCIS
-    ? input.grossIncome - expenses
-    : input.grossIncome;
+  const isSE = input.mode === "selfEmployed" || input.mode === "cis";
+  const expenses = isSE ? Math.max(0, input.businessExpenses) : 0;
+  const grossForTax = isSE ? input.grossIncome - expenses : input.grossIncome;
 
-  const taxWithout = calculateIncomeTax(grossForTax, input.bands);
-  const taxWith = calculateIncomeTax(grossForTax, input.bands, {
+  const without = calculateIncomeTax(grossForTax, regime);
+  const withExt = calculateIncomeTax(grossForTax, regime, {
     bandExtension: contribution.grossContribution,
   });
+  return Math.max(0, without.total - withExt.total);
+}
 
-  return Math.max(0, taxWithout.total - taxWith.total);
+export type AnnualAllowanceUsage = {
+  limit: number;
+  used: number;
+  remaining: number;
+  excess: number;
+  exceeded: boolean;
+  tapered: boolean;
+  mpaaActive: boolean;
+};
+
+function computeAnnualAllowance(
+  input: CalculatorInput,
+  contribution: ContributionBreakdown,
+  employerContribution: number,
+): AnnualAllowanceUsage {
+  const used = contribution.grossContribution + employerContribution;
+
+  if (input.annualAllowance.mpaaActive) {
+    const limit = input.annualAllowance.mpaaLimit;
+    const excess = Math.max(0, used - limit);
+    return {
+      limit,
+      used,
+      remaining: Math.max(0, limit - used),
+      excess,
+      exceeded: excess > 0,
+      tapered: false,
+      mpaaActive: true,
+    };
+  }
+
+  // Adjusted income for AA taper is broadly: gross income + employer
+  // contribution. We don't model salary-sacrificed contributions added back —
+  // a simplification, but close enough for ballpark figures.
+  const adjustedIncome = input.grossIncome + employerContribution;
+  let limit = input.annualAllowance.regularLimit;
+  let tapered = false;
+  if (adjustedIncome > input.annualAllowance.taperStart) {
+    const reduction =
+      (adjustedIncome - input.annualAllowance.taperStart) *
+      input.annualAllowance.taperRate;
+    limit = Math.max(
+      input.annualAllowance.minimum,
+      input.annualAllowance.regularLimit - reduction,
+    );
+    tapered = true;
+  }
+
+  const excess = Math.max(0, used - limit);
+  return {
+    limit,
+    used,
+    remaining: Math.max(0, limit - used),
+    excess,
+    exceeded: excess > 0,
+    tapered,
+    mpaaActive: false,
+  };
 }
 
 export type ContributionResult = ContributionBreakdown & {
-  higherRateRelief: number;        // SA-claimable HR/AR uplift
+  higherRateRelief: number;
   employerContribution: number;
-  totalAddedToPension: number;     // employee gross + employer
-  effectiveCost: number;           // net out-of-pocket cost = withoutCash - withCash
-  valueRatio: number;              // totalAddedToPension / effectiveCost (Infinity when free)
+  totalAddedToPension: number;
+  effectiveCost: number;
+  valueRatio: number;
+  annualAllowance: AnnualAllowanceUsage;
 };
 
 export type WithdrawalResult = {
   totalPot: number;
-  taxFreeLumpSum: number;
+  taxFreeLumpSum: number;             // capped at LSA remaining
+  taxFreeLumpSumRequested: number;    // before LSA cap
+  taxFreeLumpSumCapped: number;       // amount cut off by the cap
+  lsaRemainingBefore: number;
+  lsaRemainingAfter: number;
+  lsaCapApplied: boolean;
   taxablePot: number;
   annualWithdrawal: number;
-  annualTaxFreePortion: number;     // UFPLS view
-  annualTaxablePortion: number;     // UFPLS view
+  annualTaxFreePortion: number;
+  annualTaxablePortion: number;
   otherIncome: number;
   totalTaxableInRetirement: number;
   effectivePA: number;
   taxOnTotalRetirementIncome: number;
-  incrementalTaxFromWithdrawal: number;  // tax attributable to the withdrawal alone
+  incrementalTaxFromWithdrawal: number;
   netAnnualWithdrawal: number;
   effectiveTaxRate: number;
   ageAccessAvailable: boolean;
   ageThreshold: number;
 };
 
-function computeWithdrawal(input: CalculatorInput): WithdrawalResult {
+function computeWithdrawal(
+  input: CalculatorInput,
+  regime: TaxRegime,
+): WithdrawalResult {
   const totalPot = Math.max(0, input.potValue);
   const tflsRate = Math.min(1, Math.max(0, input.taxFreeLumpSumPercent));
-  const taxFreeLumpSum = totalPot * tflsRate;
+  const requested = totalPot * tflsRate;
+
+  const lsaRemainingBefore = Math.max(
+    0,
+    input.lumpSumAllowance.cap - Math.max(0, input.lumpSumAllowance.alreadyUsed),
+  );
+  const taxFreeLumpSum = Math.min(requested, lsaRemainingBefore);
+  const capped = Math.max(0, requested - taxFreeLumpSum);
   const taxablePot = totalPot - taxFreeLumpSum;
 
   const annualWithdrawal = Math.max(0, input.annualWithdrawal);
   const otherIncome = Math.max(0, input.otherRetirementIncome);
   const totalTaxable = annualWithdrawal + otherIncome;
 
-  const taxOnTotal = calculateIncomeTax(totalTaxable, input.bands, {
+  const taxOnTotal = calculateIncomeTax(totalTaxable, regime, {
     overridePA: input.retirementPersonalAllowance,
   });
-  const taxOnOtherAlone = calculateIncomeTax(otherIncome, input.bands, {
+  const taxOnOtherAlone = calculateIncomeTax(otherIncome, regime, {
     overridePA: input.retirementPersonalAllowance,
   });
-
   const incrementalTax = Math.max(
     0,
     taxOnTotal.total - taxOnOtherAlone.total,
@@ -382,6 +639,11 @@ function computeWithdrawal(input: CalculatorInput): WithdrawalResult {
   return {
     totalPot,
     taxFreeLumpSum,
+    taxFreeLumpSumRequested: requested,
+    taxFreeLumpSumCapped: capped,
+    lsaRemainingBefore,
+    lsaRemainingAfter: Math.max(0, lsaRemainingBefore - taxFreeLumpSum),
+    lsaCapApplied: capped > 0,
     taxablePot,
     annualWithdrawal,
     annualTaxFreePortion: annualWithdrawal * tflsRate,
@@ -403,14 +665,17 @@ export type CalculatorResult = {
   scenarioWithoutSipp: ScenarioBreakdown;
   scenarioWithSipp: ScenarioBreakdown;
   withdrawal: WithdrawalResult;
+  regime: TaxRegime;
 };
 
 export function calculate(input: CalculatorInput): CalculatorResult {
+  const regime = regimeFor(input);
+
   const contribution = resolveContribution(
     input.contributionMethod,
     input.contributionBasis,
     input.contributionAmount,
-    input.bands.basicRate,
+    regime.reliefRate,
   );
 
   const employerContribution =
@@ -419,18 +684,24 @@ export function calculate(input: CalculatorInput): CalculatorResult {
         (Math.max(0, input.employerContributionPercent) / 100)
       : 0;
 
-  const scenarioWithoutSipp = computeScenario(input, null);
-  const scenarioWithSipp = computeScenario(input, contribution);
+  const scenarioWithoutSipp = computeScenario(input, regime, null);
+  const scenarioWithSipp = computeScenario(input, regime, contribution);
 
-  const higherRateRelief = computeHigherRateRelief(input, contribution);
+  const higherRateRelief = computeHigherRateRelief(input, regime, contribution);
+  const annualAllowance = computeAnnualAllowance(
+    input,
+    contribution,
+    employerContribution,
+  );
 
   const totalAddedToPension =
     contribution.grossContribution + employerContribution;
   const effectiveCost =
     scenarioWithoutSipp.netCashPosition - scenarioWithSipp.netCashPosition;
-  const valueRatio = effectiveCost > 0 ? totalAddedToPension / effectiveCost : Infinity;
+  const valueRatio =
+    effectiveCost > 0 ? totalAddedToPension / effectiveCost : Infinity;
 
-  const withdrawal = computeWithdrawal(input);
+  const withdrawal = computeWithdrawal(input, regime);
 
   return {
     contribution: {
@@ -440,14 +711,17 @@ export function calculate(input: CalculatorInput): CalculatorResult {
       totalAddedToPension,
       effectiveCost,
       valueRatio,
+      annualAllowance,
     },
     scenarioWithoutSipp,
     scenarioWithSipp,
     withdrawal,
+    regime,
   };
 }
 
-// Formatting helpers used by the page.
+// ---- Formatting helpers ----
+
 const currencyFormatter = new Intl.NumberFormat("en-GB", {
   style: "currency",
   currency: "GBP",

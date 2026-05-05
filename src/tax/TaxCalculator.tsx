@@ -9,6 +9,8 @@ import {
   type ContributionBasis,
   type ContributionMethod,
   type EmploymentMode,
+  type Jurisdiction,
+  type TaxRegime,
 } from "./calculator";
 
 const MODE_OPTIONS: { value: EmploymentMode; label: string; hint: string }[] = [
@@ -64,6 +66,31 @@ const FALLBACK = (value: string, fallback: number) => {
 
 type ContribInputMode = "amount" | "percent";
 
+// Map a marginal tax rate back to a UK band label, given the regime that
+// produced it. Falls back to a percentage if the rate doesn't match any
+// known bracket.
+function bandLabel(rate: number, regime: TaxRegime): string {
+  if (rate === 0) return "Below allowance";
+  const idx = regime.brackets.findIndex((b) => b.rate === rate);
+  if (idx < 0) return formatPercent(rate, 0);
+  if (regime.brackets.length === 3) {
+    return ["Basic rate", "Higher rate", "Additional rate"][idx] ?? formatPercent(rate, 0);
+  }
+  if (regime.brackets.length === 6) {
+    return (
+      [
+        "Starter rate",
+        "Basic rate",
+        "Intermediate rate",
+        "Higher rate",
+        "Advanced rate",
+        "Top rate",
+      ][idx] ?? formatPercent(rate, 0)
+    );
+  }
+  return formatPercent(rate, 0);
+}
+
 export default function TaxCalculator() {
   const [input, setInput] = createSignal<CalculatorInput>({ ...DEFAULT_INPUT });
   const [contribInputMode, setContribInputMode] =
@@ -76,9 +103,15 @@ export default function TaxCalculator() {
   ) => setInput((prev) => ({ ...prev, [key]: value }));
 
   const updateBand = (key: keyof CalculatorInput["bands"], value: number) =>
+    setInput((prev) => ({ ...prev, bands: { ...prev.bands, [key]: value } }));
+
+  const updateScottishBand = (
+    key: keyof CalculatorInput["scottishBands"],
+    value: number,
+  ) =>
     setInput((prev) => ({
       ...prev,
-      bands: { ...prev.bands, [key]: value },
+      scottishBands: { ...prev.scottishBands, [key]: value },
     }));
 
   const updateNI = (key: keyof CalculatorInput["niBands"], value: number) =>
@@ -87,16 +120,53 @@ export default function TaxCalculator() {
       niBands: { ...prev.niBands, [key]: value },
     }));
 
-  const resetBands = () =>
+  const updateClass4 = (
+    key: keyof CalculatorInput["class4NI"],
+    value: number,
+  ) =>
     setInput((prev) => ({
       ...prev,
-      bands: { ...DEFAULT_INPUT.bands },
+      class4NI: { ...prev.class4NI, [key]: value },
     }));
 
-  const resetNI = () =>
+  const updateAA = <K extends keyof CalculatorInput["annualAllowance"]>(
+    key: K,
+    value: CalculatorInput["annualAllowance"][K],
+  ) =>
     setInput((prev) => ({
       ...prev,
-      niBands: { ...DEFAULT_INPUT.niBands },
+      annualAllowance: { ...prev.annualAllowance, [key]: value },
+    }));
+
+  const updateLSA = (
+    key: keyof CalculatorInput["lumpSumAllowance"],
+    value: number,
+  ) =>
+    setInput((prev) => ({
+      ...prev,
+      lumpSumAllowance: { ...prev.lumpSumAllowance, [key]: value },
+    }));
+
+  const resetBands = () =>
+    setInput((prev) => ({ ...prev, bands: { ...DEFAULT_INPUT.bands } }));
+  const resetScottishBands = () =>
+    setInput((prev) => ({
+      ...prev,
+      scottishBands: { ...DEFAULT_INPUT.scottishBands },
+    }));
+  const resetNI = () =>
+    setInput((prev) => ({ ...prev, niBands: { ...DEFAULT_INPUT.niBands } }));
+  const resetClass4 = () =>
+    setInput((prev) => ({ ...prev, class4NI: { ...DEFAULT_INPUT.class4NI } }));
+  const resetAA = () =>
+    setInput((prev) => ({
+      ...prev,
+      annualAllowance: { ...DEFAULT_INPUT.annualAllowance },
+    }));
+  const resetLSA = () =>
+    setInput((prev) => ({
+      ...prev,
+      lumpSumAllowance: { ...DEFAULT_INPUT.lumpSumAllowance },
     }));
 
   const effectiveInput = createMemo<CalculatorInput>(() => {
@@ -118,6 +188,7 @@ export default function TaxCalculator() {
   const isRASLike = () =>
     input().contributionMethod === "ras" ||
     input().contributionMethod === "sipp";
+  const isScotland = () => input().jurisdiction === "scotland";
 
   const cashDelta = () =>
     result().scenarioWithSipp.netCashPosition -
@@ -140,7 +211,8 @@ export default function TaxCalculator() {
         <p class="subtitle">
           Compare your tax position with and without a SIPP or workplace pension
           contribution. Models PAYE salaries, sole traders, and CIS subcontractors,
-          plus a retirement drawdown projection.
+          plus a retirement drawdown projection. Supports rest-of-UK and Scottish
+          tax bands.
         </p>
         <div class="tax-warning">
           <strong>Estimate only — not financial advice.</strong> Workplace schemes
@@ -153,7 +225,7 @@ export default function TaxCalculator() {
       <div class="tax-layout">
         <section class="tax-inputs">
           <div class="tax-card">
-            <h2>1. Employment</h2>
+            <h2>Employment</h2>
             <div class="tax-mode-row">
               <For each={MODE_OPTIONS}>
                 {(option) => (
@@ -170,6 +242,26 @@ export default function TaxCalculator() {
             </div>
 
             <div class="tax-grid">
+              <label class="field">
+                <span class="field-label">Tax jurisdiction</span>
+                <select
+                  value={input().jurisdiction}
+                  onChange={(e) =>
+                    update(
+                      "jurisdiction",
+                      e.currentTarget.value as Jurisdiction,
+                    )
+                  }
+                >
+                  <option value="rUK">England, Wales &amp; NI (rUK)</option>
+                  <option value="scotland">Scotland</option>
+                </select>
+                <span class="field-hint">
+                  Scotland uses 6 income-tax bands. RAS providers still claim 20%
+                  at source — Scottish residents reconcile via SA.
+                </span>
+              </label>
+
               <label class="field">
                 <span class="field-label">
                   {isCIS() ? "Annual gross CIS income" : "Annual gross income"}
@@ -232,7 +324,7 @@ export default function TaxCalculator() {
           </div>
 
           <div class="tax-card">
-            <h2>2. Pension contribution</h2>
+            <h2>Pension contribution</h2>
 
             <label class="field">
               <span class="field-label">Method</span>
@@ -340,7 +432,7 @@ export default function TaxCalculator() {
 
           <Show when={isEmployed()}>
             <div class="tax-card">
-              <h2>3. Employer contribution</h2>
+              <h2>Employer contribution</h2>
               <div class="tax-grid">
                 <label class="field">
                   <span class="field-label">Employer percent</span>
@@ -390,137 +482,337 @@ export default function TaxCalculator() {
 
           <details class="tax-card tax-collapsible">
             <summary>
-              <h2>4. Tax bands &amp; rates</h2>
-              <span>Edit these if HMRC changes anything.</span>
+              <h2>Tax bands &amp; rates</h2>
+              <span>
+                {isScotland() ? "Scottish 6-band" : "rUK 3-band"}
+              </span>
             </summary>
-            <div class="tax-grid">
-              <label class="field">
-                <span class="field-label">Personal allowance</span>
-                <input
-                  type="number"
-                  value={input().bands.personalAllowance}
-                  onInput={(e) =>
-                    updateBand(
-                      "personalAllowance",
-                      FALLBACK(e.currentTarget.value, 0),
-                    )
-                  }
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">Basic rate threshold</span>
-                <input
-                  type="number"
-                  value={input().bands.basicRateThreshold}
-                  onInput={(e) =>
-                    updateBand(
-                      "basicRateThreshold",
-                      FALLBACK(e.currentTarget.value, 0),
-                    )
-                  }
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">Higher rate threshold</span>
-                <input
-                  type="number"
-                  value={input().bands.higherRateThreshold}
-                  onInput={(e) =>
-                    updateBand(
-                      "higherRateThreshold",
-                      FALLBACK(e.currentTarget.value, 0),
-                    )
-                  }
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">Additional rate threshold</span>
-                <input
-                  type="number"
-                  value={input().bands.additionalRateThreshold}
-                  onInput={(e) =>
-                    updateBand(
-                      "additionalRateThreshold",
-                      FALLBACK(e.currentTarget.value, 0),
-                    )
-                  }
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">Basic rate</span>
-                <input
-                  type="number"
-                  step={0.01}
-                  value={input().bands.basicRate}
-                  onInput={(e) =>
-                    updateBand("basicRate", FALLBACK(e.currentTarget.value, 0))
-                  }
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">Higher rate</span>
-                <input
-                  type="number"
-                  step={0.01}
-                  value={input().bands.higherRate}
-                  onInput={(e) =>
-                    updateBand("higherRate", FALLBACK(e.currentTarget.value, 0))
-                  }
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">Additional rate</span>
-                <input
-                  type="number"
-                  step={0.01}
-                  value={input().bands.additionalRate}
-                  onInput={(e) =>
-                    updateBand(
-                      "additionalRate",
-                      FALLBACK(e.currentTarget.value, 0),
-                    )
-                  }
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">PA taper start</span>
-                <input
-                  type="number"
-                  value={input().bands.paTaperStart}
-                  onInput={(e) =>
-                    updateBand(
-                      "paTaperStart",
-                      FALLBACK(e.currentTarget.value, 0),
-                    )
-                  }
-                />
-              </label>
-              <label class="field">
-                <span class="field-label">PA taper rate (£ lost per £1 over)</span>
-                <input
-                  type="number"
-                  step={0.05}
-                  value={input().bands.paTaperRate}
-                  onInput={(e) =>
-                    updateBand(
-                      "paTaperRate",
-                      FALLBACK(e.currentTarget.value, 0),
-                    )
-                  }
-                />
-              </label>
-            </div>
-            <div class="tax-row-actions">
-              <button class="btn ghost" type="button" onClick={resetBands}>
-                Reset to UK 2024–25 defaults
-              </button>
-            </div>
+            <Show
+              when={!isScotland()}
+              fallback={
+                <>
+                  <div class="tax-grid">
+                    <label class="field">
+                      <span class="field-label">Personal allowance</span>
+                      <input
+                        type="number"
+                        value={input().scottishBands.personalAllowance}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "personalAllowance",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Starter band ends at</span>
+                      <input
+                        type="number"
+                        value={input().scottishBands.starterRateUpper}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "starterRateUpper",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Basic band ends at</span>
+                      <input
+                        type="number"
+                        value={input().scottishBands.basicRateUpper}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "basicRateUpper",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Intermediate band ends at</span>
+                      <input
+                        type="number"
+                        value={input().scottishBands.intermediateRateUpper}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "intermediateRateUpper",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Higher band ends at</span>
+                      <input
+                        type="number"
+                        value={input().scottishBands.higherRateUpper}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "higherRateUpper",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Advanced band ends at</span>
+                      <input
+                        type="number"
+                        value={input().scottishBands.advancedRateUpper}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "advancedRateUpper",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Starter rate</span>
+                      <input
+                        type="number"
+                        step={0.01}
+                        value={input().scottishBands.starterRate}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "starterRate",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Basic rate</span>
+                      <input
+                        type="number"
+                        step={0.01}
+                        value={input().scottishBands.basicRate}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "basicRate",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Intermediate rate</span>
+                      <input
+                        type="number"
+                        step={0.01}
+                        value={input().scottishBands.intermediateRate}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "intermediateRate",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Higher rate</span>
+                      <input
+                        type="number"
+                        step={0.01}
+                        value={input().scottishBands.higherRate}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "higherRate",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Advanced rate</span>
+                      <input
+                        type="number"
+                        step={0.01}
+                        value={input().scottishBands.advancedRate}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "advancedRate",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">Top rate</span>
+                      <input
+                        type="number"
+                        step={0.01}
+                        value={input().scottishBands.topRate}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "topRate",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">PA taper start</span>
+                      <input
+                        type="number"
+                        value={input().scottishBands.paTaperStart}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "paTaperStart",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                    <label class="field">
+                      <span class="field-label">PA taper rate</span>
+                      <input
+                        type="number"
+                        step={0.05}
+                        value={input().scottishBands.paTaperRate}
+                        onInput={(e) =>
+                          updateScottishBand(
+                            "paTaperRate",
+                            FALLBACK(e.currentTarget.value, 0),
+                          )
+                        }
+                      />
+                    </label>
+                  </div>
+                  <div class="tax-row-actions">
+                    <button
+                      class="btn ghost"
+                      type="button"
+                      onClick={resetScottishBands}
+                    >
+                      Reset Scottish defaults
+                    </button>
+                  </div>
+                </>
+              }
+            >
+              <div class="tax-grid">
+                <label class="field">
+                  <span class="field-label">Personal allowance</span>
+                  <input
+                    type="number"
+                    value={input().bands.personalAllowance}
+                    onInput={(e) =>
+                      updateBand(
+                        "personalAllowance",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Higher rate threshold</span>
+                  <input
+                    type="number"
+                    value={input().bands.higherRateThreshold}
+                    onInput={(e) =>
+                      updateBand(
+                        "higherRateThreshold",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Additional rate threshold</span>
+                  <input
+                    type="number"
+                    value={input().bands.additionalRateThreshold}
+                    onInput={(e) =>
+                      updateBand(
+                        "additionalRateThreshold",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Basic rate</span>
+                  <input
+                    type="number"
+                    step={0.01}
+                    value={input().bands.basicRate}
+                    onInput={(e) =>
+                      updateBand("basicRate", FALLBACK(e.currentTarget.value, 0))
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Higher rate</span>
+                  <input
+                    type="number"
+                    step={0.01}
+                    value={input().bands.higherRate}
+                    onInput={(e) =>
+                      updateBand(
+                        "higherRate",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Additional rate</span>
+                  <input
+                    type="number"
+                    step={0.01}
+                    value={input().bands.additionalRate}
+                    onInput={(e) =>
+                      updateBand(
+                        "additionalRate",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">PA taper start</span>
+                  <input
+                    type="number"
+                    value={input().bands.paTaperStart}
+                    onInput={(e) =>
+                      updateBand(
+                        "paTaperStart",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">PA taper rate</span>
+                  <input
+                    type="number"
+                    step={0.05}
+                    value={input().bands.paTaperRate}
+                    onInput={(e) =>
+                      updateBand(
+                        "paTaperRate",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <div class="tax-row-actions">
+                <button class="btn ghost" type="button" onClick={resetBands}>
+                  Reset rUK defaults
+                </button>
+              </div>
+            </Show>
           </details>
 
           <Show when={isEmployed()}>
             <details class="tax-card tax-collapsible">
               <summary>
-                <h2>5. National Insurance</h2>
+                <h2>Employee NI (Class 1)</h2>
                 <span>Affects salary sacrifice savings.</span>
               </summary>
               <label class="tax-checkbox">
@@ -531,7 +823,7 @@ export default function TaxCalculator() {
                     update("includeNI", e.currentTarget.checked)
                   }
                 />
-                <span>Include employee National Insurance in calculations</span>
+                <span>Include employee Class 1 NI in calculations</span>
               </label>
               <div class="tax-grid">
                 <label class="field">
@@ -591,9 +883,210 @@ export default function TaxCalculator() {
             </details>
           </Show>
 
+          <Show when={isSelfEmployedOrCIS()}>
+            <details class="tax-card tax-collapsible">
+              <summary>
+                <h2>Self-employed NI (Class 4)</h2>
+                <span>Paid on profit, on top of income tax.</span>
+              </summary>
+              <label class="tax-checkbox">
+                <input
+                  type="checkbox"
+                  checked={input().includeClass4NI}
+                  onChange={(e) =>
+                    update("includeClass4NI", e.currentTarget.checked)
+                  }
+                />
+                <span>Include Class 4 NI in calculations</span>
+              </label>
+              <div class="tax-grid">
+                <label class="field">
+                  <span class="field-label">Lower profits limit</span>
+                  <input
+                    type="number"
+                    value={input().class4NI.lowerLimit}
+                    onInput={(e) =>
+                      updateClass4(
+                        "lowerLimit",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Upper profits limit</span>
+                  <input
+                    type="number"
+                    value={input().class4NI.upperLimit}
+                    onInput={(e) =>
+                      updateClass4(
+                        "upperLimit",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Main rate</span>
+                  <input
+                    type="number"
+                    step={0.01}
+                    value={input().class4NI.mainRate}
+                    onInput={(e) =>
+                      updateClass4(
+                        "mainRate",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+                <label class="field">
+                  <span class="field-label">Upper rate</span>
+                  <input
+                    type="number"
+                    step={0.01}
+                    value={input().class4NI.upperRate}
+                    onInput={(e) =>
+                      updateClass4(
+                        "upperRate",
+                        FALLBACK(e.currentTarget.value, 0),
+                      )
+                    }
+                  />
+                </label>
+              </div>
+              <div class="tax-row-actions">
+                <button class="btn ghost" type="button" onClick={resetClass4}>
+                  Reset Class 4 defaults
+                </button>
+              </div>
+            </details>
+          </Show>
+
           <details class="tax-card tax-collapsible">
             <summary>
-              <h2>6. Retirement &amp; withdrawal</h2>
+              <h2>Annual Allowance &amp; MPAA</h2>
+              <span>Cap on tax-relievable contributions.</span>
+            </summary>
+            <label class="tax-checkbox">
+              <input
+                type="checkbox"
+                checked={input().annualAllowance.mpaaActive}
+                onChange={(e) => updateAA("mpaaActive", e.currentTarget.checked)}
+              />
+              <span>
+                MPAA triggered (already taken flexible drawdown / UFPLS)
+              </span>
+            </label>
+            <div class="tax-grid">
+              <label class="field">
+                <span class="field-label">Regular AA</span>
+                <input
+                  type="number"
+                  value={input().annualAllowance.regularLimit}
+                  onInput={(e) =>
+                    updateAA(
+                      "regularLimit",
+                      FALLBACK(e.currentTarget.value, 0),
+                    )
+                  }
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">MPAA limit</span>
+                <input
+                  type="number"
+                  value={input().annualAllowance.mpaaLimit}
+                  onInput={(e) =>
+                    updateAA("mpaaLimit", FALLBACK(e.currentTarget.value, 0))
+                  }
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Taper start (adjusted income)</span>
+                <input
+                  type="number"
+                  value={input().annualAllowance.taperStart}
+                  onInput={(e) =>
+                    updateAA("taperStart", FALLBACK(e.currentTarget.value, 0))
+                  }
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Taper rate</span>
+                <input
+                  type="number"
+                  step={0.05}
+                  value={input().annualAllowance.taperRate}
+                  onInput={(e) =>
+                    updateAA("taperRate", FALLBACK(e.currentTarget.value, 0))
+                  }
+                />
+              </label>
+              <label class="field">
+                <span class="field-label">Floor (tapered minimum)</span>
+                <input
+                  type="number"
+                  value={input().annualAllowance.minimum}
+                  onInput={(e) =>
+                    updateAA("minimum", FALLBACK(e.currentTarget.value, 0))
+                  }
+                />
+              </label>
+            </div>
+            <div class="tax-row-actions">
+              <button class="btn ghost" type="button" onClick={resetAA}>
+                Reset AA defaults
+              </button>
+            </div>
+          </details>
+
+          <details class="tax-card tax-collapsible">
+            <summary>
+              <h2>Lump Sum Allowance</h2>
+              <span>Caps the tax-free portion of pension lump sums.</span>
+            </summary>
+            <div class="tax-grid">
+              <label class="field">
+                <span class="field-label">LSA cap (lifetime)</span>
+                <input
+                  type="number"
+                  value={input().lumpSumAllowance.cap}
+                  onInput={(e) =>
+                    updateLSA("cap", FALLBACK(e.currentTarget.value, 0))
+                  }
+                />
+                <span class="field-hint">
+                  Default £268,275 — replaced the LTA in April 2024.
+                </span>
+              </label>
+              <label class="field">
+                <span class="field-label">Already used</span>
+                <input
+                  type="number"
+                  value={input().lumpSumAllowance.alreadyUsed}
+                  onInput={(e) =>
+                    updateLSA(
+                      "alreadyUsed",
+                      FALLBACK(e.currentTarget.value, 0),
+                    )
+                  }
+                />
+                <span class="field-hint">
+                  Tax-free lump sums you've already taken from any pension.
+                </span>
+              </label>
+            </div>
+            <div class="tax-row-actions">
+              <button class="btn ghost" type="button" onClick={resetLSA}>
+                Reset LSA defaults
+              </button>
+            </div>
+          </details>
+
+          <details class="tax-card tax-collapsible">
+            <summary>
+              <h2>Retirement &amp; withdrawal</h2>
               <span>Project tax on the way out.</span>
             </summary>
             <div class="tax-grid">
@@ -722,7 +1215,7 @@ export default function TaxCalculator() {
                   </dd>
                 </div>
               </Show>
-              <div class="tax-defs-row total">
+              <div class="total">
                 <dt>Total added to pension this year</dt>
                 <dd>
                   <strong>
@@ -743,6 +1236,58 @@ export default function TaxCalculator() {
                 </dd>
               </div>
             </dl>
+          </div>
+
+          <div class="tax-card">
+            <h2>Annual Allowance</h2>
+            <dl class="tax-defs">
+              <div>
+                <dt>Allowance for this year</dt>
+                <dd>
+                  <strong>
+                    {formatCurrency(result().contribution.annualAllowance.limit)}
+                  </strong>{" "}
+                  <Show when={result().contribution.annualAllowance.mpaaActive}>
+                    <span class="muted">(MPAA)</span>
+                  </Show>
+                  <Show when={result().contribution.annualAllowance.tapered}>
+                    <span class="muted">(tapered)</span>
+                  </Show>
+                </dd>
+              </div>
+              <div>
+                <dt>Total contributions counted (you + employer)</dt>
+                <dd>{formatCurrency(result().contribution.annualAllowance.used)}</dd>
+              </div>
+              <div>
+                <dt>Remaining headroom</dt>
+                <dd>
+                  {formatCurrency(result().contribution.annualAllowance.remaining)}
+                </dd>
+              </div>
+            </dl>
+            <Show when={result().contribution.annualAllowance.exceeded}>
+              <div class="tax-banner warn">
+                <strong>Annual Allowance exceeded by{" "}
+                {formatCurrency(result().contribution.annualAllowance.excess)}.</strong>{" "}
+                The excess is taxed at your marginal rate via the Annual Allowance
+                charge — it cancels the relief on the over-payment. Consider
+                carry-forward (up to 3 prior years of unused AA) or reducing this
+                year's contribution.
+              </div>
+            </Show>
+            <Show
+              when={
+                !result().contribution.annualAllowance.exceeded &&
+                result().contribution.annualAllowance.tapered
+              }
+            >
+              <div class="tax-banner info">
+                Your AA is tapered because adjusted income exceeds the taper
+                threshold. The figure above is the reduced limit; the standard AA
+                no longer applies.
+              </div>
+            </Show>
           </div>
 
           <div class="tax-card">
@@ -829,7 +1374,7 @@ export default function TaxCalculator() {
                 </tr>
                 <Show when={isEmployed() && input().includeNI}>
                   <tr>
-                    <th scope="row">National Insurance</th>
+                    <th scope="row">Class 1 NI</th>
                     <td>
                       {formatCurrency(
                         result().scenarioWithoutSipp.nationalInsurance,
@@ -841,6 +1386,18 @@ export default function TaxCalculator() {
                       )}
                     </td>
                     <td>{formatSignedCurrency(niDelta())}</td>
+                  </tr>
+                </Show>
+                <Show when={isSelfEmployedOrCIS() && input().includeClass4NI}>
+                  <tr>
+                    <th scope="row">Class 4 NI</th>
+                    <td>
+                      {formatCurrency(result().scenarioWithoutSipp.class4NI)}
+                    </td>
+                    <td>
+                      {formatCurrency(result().scenarioWithSipp.class4NI)}
+                    </td>
+                    <td class="muted">—</td>
                   </tr>
                 </Show>
                 <Show when={isCIS()}>
@@ -913,20 +1470,18 @@ export default function TaxCalculator() {
                   </td>
                 </tr>
                 <tr>
-                  <th scope="row">Tax band</th>
+                  <th scope="row">Top tax band reached</th>
                   <td>
-                    {result().scenarioWithoutSipp.incomeTax.inAdditional > 0
-                      ? "Additional rate"
-                      : result().scenarioWithoutSipp.inHigherBand
-                        ? "Higher rate"
-                        : "Basic rate"}
+                    {bandLabel(
+                      result().scenarioWithoutSipp.incomeTax.topMarginalRate,
+                      result().regime,
+                    )}
                   </td>
                   <td>
-                    {result().scenarioWithSipp.incomeTax.inAdditional > 0
-                      ? "Additional rate"
-                      : result().scenarioWithSipp.inHigherBand
-                        ? "Higher rate"
-                        : "Basic rate"}
+                    {bandLabel(
+                      result().scenarioWithSipp.incomeTax.topMarginalRate,
+                      result().regime,
+                    )}
                   </td>
                   <td class="muted">—</td>
                 </tr>
@@ -950,6 +1505,24 @@ export default function TaxCalculator() {
                   <strong>
                     {formatCurrency(result().withdrawal.taxFreeLumpSum)}
                   </strong>
+                </dd>
+              </div>
+              <Show when={result().withdrawal.lsaCapApplied}>
+                <div>
+                  <dt>Capped by LSA — TFLS reduced from</dt>
+                  <dd>
+                    {formatCurrency(
+                      result().withdrawal.taxFreeLumpSumRequested,
+                    )}{" "}
+                    →{" "}
+                    {formatCurrency(result().withdrawal.taxFreeLumpSum)}
+                  </dd>
+                </div>
+              </Show>
+              <div>
+                <dt>LSA remaining after this</dt>
+                <dd>
+                  {formatCurrency(result().withdrawal.lsaRemainingAfter)}
                 </dd>
               </div>
               <div>
@@ -998,6 +1571,15 @@ export default function TaxCalculator() {
                 </dd>
               </div>
             </dl>
+
+            <Show when={result().withdrawal.lsaCapApplied}>
+              <div class="tax-banner warn">
+                <strong>Lump Sum Allowance reached.</strong> Anything above the LSA
+                cap is paid as taxable income, not tax-free. £
+                {formatCurrency(result().withdrawal.taxFreeLumpSumCapped, true)} of
+                your requested lump sum becomes taxable.
+              </div>
+            </Show>
 
             <div
               class={`tax-banner ${
@@ -1055,7 +1637,8 @@ export default function TaxCalculator() {
               <Show when={result().contribution.higherRateRelief > 0}>
                 <li>
                   Because part of your income is in the higher- or additional-rate
-                  band, you can claim a further{" "}
+                  band
+                  {isScotland() ? " (Scottish bands)" : ""}, you can claim a further{" "}
                   <strong>
                     {formatCurrency(result().contribution.higherRateRelief)}
                   </strong>{" "}
@@ -1162,19 +1745,28 @@ export default function TaxCalculator() {
                 pension automatically.
               </li>
               <li>
-                Pension withdrawals: typically 25% tax-free (capped at the lump-sum
-                allowance), 75% taxable as income. UFPLS applies the 25/75 split to
-                each individual withdrawal instead of taking the lump sum upfront.
+                <strong>Annual Allowance:</strong> contributions above the AA are
+                taxed at your marginal rate via an AA charge — relief is clawed
+                back. The AA tapers above adjusted income of £260k toward £10k
+                minimum.
+              </li>
+              <li>
+                <strong>MPAA:</strong> taking taxable pension income drops your AA
+                to £10k. Withdrawing and immediately re-contributing can be
+                treated as <em>pension recycling</em> and unwound by HMRC.
+              </li>
+              <li>
+                <strong>Lump Sum Allowance (£268,275):</strong> caps the tax-free
+                portion of pension lump sums across all your pensions. Anything
+                above the LSA is paid as taxable income.
+              </li>
+              <li>
+                Pension withdrawals: typically 25% tax-free up to the LSA, then 75%
+                taxable. UFPLS applies the 25/75 split per withdrawal instead of
+                taking the lump sum upfront.
               </li>
               <li>
                 Minimum access age is 55 today and rising to 57 from April 2028.
-              </li>
-              <li>
-                <strong>MPAA &amp; recycling:</strong> taking taxable pension income
-                triggers the Money Purchase Annual Allowance — your annual
-                contribution allowance falls (currently £10,000). Withdrawing then
-                immediately re-contributing can be treated as <em>pension
-                recycling</em> by HMRC and unwound.
               </li>
               <li>
                 Workplace pension schemes vary. Check with your scheme whether it
@@ -1182,9 +1774,14 @@ export default function TaxCalculator() {
                 effects differ.
               </li>
               <li>
-                This is an estimate. It does not model dividend income, savings
-                income, Scottish/Welsh rates, the High Income Child Benefit Charge,
-                self-employed Class 2/4 NI, or annual/lifetime allowance limits.
+                Self-employed pay Class 4 NI on profit (6% / 2% above the UEL) on
+                top of income tax. Class 2 was made non-compulsory for most from
+                April 2024.
+              </li>
+              <li>
+                This is an estimate. It does not model dividend / savings income,
+                the High Income Child Benefit Charge, marriage allowance, or
+                carry-forward of unused AA from prior years.
               </li>
             </ul>
           </div>

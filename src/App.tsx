@@ -865,6 +865,9 @@ export default function App() {
             </div>
             <div class="topbar-actions">
               <span class="status-pill">Unlocked</span>
+              <a class="btn ghost" href="/tax">
+                Tax tools
+              </a>
               <button class="btn ghost" type="button" onClick={handleLock}>
                 Lock
               </button>

@@ -279,6 +279,10 @@ body::after {
     font-size: 15px;
     cursor: pointer;
     font-family: inherit;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .btn.primary {
