@@ -30,6 +30,17 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   if (!ok) allPass = false;
 }
 
+// Case 0 — App defaults match the first-run CIS + manual SIPP scenario.
+{
+  console.log("\nCase 0: Default app inputs");
+  check("default gross income", DEFAULT_INPUT.grossIncome, 50_000);
+  check("default expenses", DEFAULT_INPUT.businessExpenses, 5_000);
+  checkBool("default mode is CIS", DEFAULT_INPUT.mode === "cis", true);
+  checkBool("default method is manual SIPP", DEFAULT_INPUT.contributionMethod === "sipp", true);
+  checkBool("default SIPP amount is net", DEFAULT_INPUT.contributionBasis === "net", true);
+  check("default pension contribution", DEFAULT_INPUT.contributionAmount, 0);
+}
+
 // Case 1 — Self-employed, £50k, £10k net into a SIPP. Default Class 4 NI on.
 {
   console.log("\nCase 1: Self-employed £50k, £10k net SIPP (Class 4 NI on)");
@@ -135,52 +146,18 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   check("tax without SIPP", r.scenarioWithoutSipp.incomeTax.total, 13_432);
   check("tax with SIPP", r.scenarioWithSipp.incomeTax.total, 11_432);
   check("Class 4 NI", r.scenarioWithSipp.class4NI, 2_556.6, 0.6);
-  check("refund without (− = refund)", r.scenarioWithoutSipp.refundOrBalance, -568);
-  check("refund with (− = refund)", r.scenarioWithSipp.refundOrBalance, -2_568);
+  // SA balance now includes Class 4 NI as well as income tax:
+  //   Without SIPP: £13,432 + £2,556.60 − £14,000 = £1,988.60 owed
+  //   With SIPP:    £11,432 + £2,556.60 − £14,000 = £11.40 refund
+  check("SA balance without SIPP", r.scenarioWithoutSipp.refundOrBalance, 1_988.6);
+  check("SA balance with SIPP", r.scenarioWithSipp.refundOrBalance, -11.4);
   check("higher-rate relief", r.contribution.higherRateRelief, 2_000);
   check("effective cost", r.contribution.effectiveCost, 6_000);
 }
 
-// Case 5 — Scottish taxpayer, £70k, 5% RAS gross. Tests 6-band logic.
+// Case 5 — AA exceeded with a large SIPP contribution.
 {
-  console.log("\nCase 5: Scotland £70k, 5% RAS gross");
-  const input: CalculatorInput = {
-    ...DEFAULT_INPUT,
-    mode: "employed",
-    grossIncome: 70_000,
-    jurisdiction: "scotland",
-    contributionMethod: "ras",
-    contributionBasis: "gross",
-    contributionAmount: 3_500,
-    employerContributionPercent: 0,
-    includeNI: false,
-  };
-  const r = calculate(input);
-
-  // Without SIPP on £70,000, PA £12,570, taxable £57,430:
-  //   Starter:      £2,827  × 19% = £537.13
-  //   Basic:        £12,094 × 20% = £2,418.80
-  //   Intermediate: £16,171 × 21% = £3,395.91
-  //   Higher:       £26,338 × 42% = £11,061.96
-  //   Total = £17,413.80
-  // With SIPP — basic band extended by £3,500, shifts intermediate/higher up:
-  //   Starter:      £2,827  × 19% = £537.13
-  //   Basic:        £15,594 × 20% = £3,118.80
-  //   Intermediate: £16,171 × 21% = £3,395.91
-  //   Higher:       £22,838 × 42% = £9,591.96
-  //   Total = £16,643.80
-  // HR relief = £17,413.80 − £16,643.80 = £770 (= £3,500 × (42% − 20%))
-  check("tax without SIPP", r.scenarioWithoutSipp.incomeTax.total, 17_413.8, 0.6);
-  check("tax with SIPP", r.scenarioWithSipp.incomeTax.total, 16_643.8, 0.6);
-  check("higher-rate relief", r.contribution.higherRateRelief, 770, 0.6);
-  check("gross contribution", r.contribution.grossContribution, 3_500);
-  // RAS provider claims 20% at source even in Scotland
-  check("government top-up", r.contribution.governmentTopUp, 700);
-}
-
-// Case 6 — AA exceeded with a large SIPP contribution.
-{
-  console.log("\nCase 6: AA breach — £80k contribution at £100k SE income");
+  console.log("\nCase 5: AA breach — £80k contribution at £100k SE income");
   const input: CalculatorInput = {
     ...DEFAULT_INPUT,
     mode: "selfEmployed",
@@ -199,9 +176,9 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   checkBool("AA tapered", r.contribution.annualAllowance.tapered, false);
 }
 
-// Case 7 — LSA cap kicks in on a £1.5m pot.
+// Case 6 — LSA cap kicks in on a £1.5m pot.
 {
-  console.log("\nCase 7: LSA cap on £1.5m pot, 25% TFLS");
+  console.log("\nCase 6: LSA cap on £1.5m pot, 25% TFLS");
   const input: CalculatorInput = {
     ...DEFAULT_INPUT,
     potValue: 1_500_000,
@@ -219,9 +196,9 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   checkBool("LSA cap applied", r.withdrawal.lsaCapApplied, true);
 }
 
-// Case 8 — MPAA active should drop the AA to £10k.
+// Case 7 — MPAA active should drop the AA to £10k.
 {
-  console.log("\nCase 8: MPAA active — AA drops to £10k");
+  console.log("\nCase 7: MPAA active — AA drops to £10k");
   const input: CalculatorInput = {
     ...DEFAULT_INPUT,
     contributionMethod: "sipp",
@@ -242,9 +219,9 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   checkBool("MPAA flag", r.contribution.annualAllowance.mpaaActive, true);
 }
 
-// Case 9 — Carry-forward extends the AA limit.
+// Case 8 — Carry-forward extends the AA limit.
 {
-  console.log("\nCase 9: AA + £30k carry-forward");
+  console.log("\nCase 8: AA + £30k carry-forward");
   const input: CalculatorInput = {
     ...DEFAULT_INPUT,
     contributionMethod: "sipp",
@@ -265,9 +242,9 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   checkBool("AA exceeded", r.contribution.annualAllowance.exceeded, false);
 }
 
-// Case 10 — HICBC: £75k earner with 2 kids; SIPP recovers part of the benefit.
+// Case 9 — HICBC: £75k earner with 2 kids; SIPP recovers part of the benefit.
 {
-  console.log("\nCase 10: HICBC — £75k, 2 kids, £5k RAS gross recovers benefit");
+  console.log("\nCase 9: HICBC — £75k, 2 kids, £5k RAS gross recovers benefit");
   const input: CalculatorInput = {
     ...DEFAULT_INPUT,
     mode: "employed",
@@ -303,9 +280,9 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   );
 }
 
-// Case 11 — HICBC ceiling: full claw-back at/above £80k.
+// Case 10 — HICBC ceiling: full claw-back at/above £80k.
 {
-  console.log("\nCase 11: HICBC — £85k income, no SIPP, full claw-back");
+  console.log("\nCase 10: HICBC — £85k income, no SIPP, full claw-back");
   const input: CalculatorInput = {
     ...DEFAULT_INPUT,
     mode: "employed",
@@ -324,6 +301,52 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
 
   check("HICBC without SIPP", r.scenarioWithoutSipp.hicbc, 1_331.20, 0.05);
   check("HICBC with SIPP", r.scenarioWithSipp.hicbc, 1_331.20, 0.05);
+}
+
+// Case 11 — SIPP restores tapered Personal Allowance.
+{
+  console.log("\nCase 11: £110k employed, £10k gross SIPP restores PA");
+  const input: CalculatorInput = {
+    ...DEFAULT_INPUT,
+    mode: "employed",
+    grossIncome: 110_000,
+    contributionMethod: "sipp",
+    contributionBasis: "gross",
+    contributionAmount: 10_000,
+    employerContributionPercent: 0,
+    includeNI: false,
+  };
+  const r = calculate(input);
+
+  check("PA without SIPP", r.scenarioWithoutSipp.effectivePA, 7_570);
+  check("PA with SIPP", r.scenarioWithSipp.effectivePA, 12_570);
+  check("tax without SIPP", r.scenarioWithoutSipp.incomeTax.total, 33_432);
+  check("tax with SIPP", r.scenarioWithSipp.incomeTax.total, 29_432);
+  check("SA tax relief", r.contribution.higherRateRelief, 4_000);
+  check("total SIPP tax relief", r.contribution.totalSippTaxRelief, 6_000);
+}
+
+// Case 12 — CIS exclusions reduce the withholding base, not taxable profit.
+{
+  console.log("\nCase 12: CIS £70k gross, £10k materials excluded from CIS base");
+  const input: CalculatorInput = {
+    ...DEFAULT_INPUT,
+    mode: "cis",
+    grossIncome: 70_000,
+    businessExpenses: 5_000,
+    cisDeductionExclusions: 10_000,
+    cisDeductionRate: 0.2,
+    contributionMethod: "sipp",
+    contributionBasis: "net",
+    contributionAmount: 8_000,
+    employerContributionPercent: 0,
+  };
+  const r = calculate(input);
+
+  check("CIS deduction base", r.scenarioWithSipp.cisDeductionBase, 60_000);
+  check("CIS deducted", r.scenarioWithSipp.cisDeducted, 12_000);
+  check("taxable profit", r.scenarioWithSipp.taxableIncome, 65_000);
+  check("SA balance with SIPP", r.scenarioWithSipp.refundOrBalance, 1_988.6);
 }
 
 console.log(allPass ? "\nAll cases passed." : "\nSome checks failed — see above.");

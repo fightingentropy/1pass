@@ -1,4 +1,4 @@
-// UK pension tax-relief calculator core.
+// UK tax and pension-relief calculator core.
 //
 // Pure functions — no DOM access, no I/O. The Solid UI feeds CalculatorInput
 // in and renders CalculatorResult out. All tax bands and rates are inputs so
@@ -14,23 +14,21 @@ export type ContributionMethod =
 
 export type ContributionBasis = "net" | "gross";
 
-export type Jurisdiction = "rUK" | "scotland";
-
 // Generic income-tax regime — works for any number of brackets.
 export type TaxBracket = { upperBound: number; rate: number };
 export type TaxRegime = {
   personalAllowance: number;
   paTaperStart: number;
   paTaperRate: number;
-  brackets: TaxBracket[];   // ordered ascending by upperBound; final upperBound = Infinity
-  reliefRate: number;       // RAS basic-rate relief (0.20 in UK, even for Scottish residents)
+  // ordered by cumulative income after allowances; final upperBound = Infinity
+  brackets: TaxBracket[];
+  reliefRate: number;       // RAS basic-rate relief
 };
 
-// rUK 3-band shape (England / Wales / NI). Editable in the UI.
+// England 3-band shape.
 export type TaxBands = {
   personalAllowance: number;
-  basicRateThreshold: number;
-  higherRateThreshold: number;
+  basicRateThreshold: number; // cumulative income after allowances
   additionalRateThreshold: number;
   basicRate: number;
   higherRate: number;
@@ -41,49 +39,13 @@ export type TaxBands = {
 
 export const DEFAULT_TAX_BANDS: TaxBands = {
   personalAllowance: 12_570,
-  basicRateThreshold: 12_570,
-  higherRateThreshold: 50_270,
+  basicRateThreshold: 37_700,
   additionalRateThreshold: 125_140,
   basicRate: 0.2,
   higherRate: 0.4,
   additionalRate: 0.45,
   paTaperStart: 100_000,
   paTaperRate: 0.5,
-};
-
-// Scottish 6-band shape. PA still UK-wide; bands and rates are Scotland-specific.
-export type ScottishBands = {
-  personalAllowance: number;
-  paTaperStart: number;
-  paTaperRate: number;
-  starterRateUpper: number;
-  basicRateUpper: number;
-  intermediateRateUpper: number;
-  higherRateUpper: number;
-  advancedRateUpper: number;
-  starterRate: number;
-  basicRate: number;
-  intermediateRate: number;
-  higherRate: number;
-  advancedRate: number;
-  topRate: number;
-};
-
-export const DEFAULT_SCOTTISH_BANDS: ScottishBands = {
-  personalAllowance: 12_570,
-  paTaperStart: 100_000,
-  paTaperRate: 0.5,
-  starterRateUpper: 15_397,
-  basicRateUpper: 27_491,
-  intermediateRateUpper: 43_662,
-  higherRateUpper: 75_000,
-  advancedRateUpper: 125_140,
-  starterRate: 0.19,
-  basicRate: 0.2,
-  intermediateRate: 0.21,
-  higherRate: 0.42,
-  advancedRate: 0.45,
-  topRate: 0.48,
 };
 
 export type NIBands = {
@@ -101,8 +63,8 @@ export const DEFAULT_NI_BANDS: NIBands = {
 };
 
 // Self-employed Class 4 NI — paid on profit, not reduced by personal pension
-// contributions. Class 2 (£3.45/wk) was made non-compulsory for most from 2024
-// so we don't model it here.
+// contributions. Class 2 is treated as paid for most people above the small
+// profits threshold, so this calculator does not add a compulsory Class 2 bill.
 export type Class4NIBands = {
   lowerLimit: number;
   upperLimit: number;
@@ -187,15 +149,14 @@ export type CalculatorInput = {
   mode: EmploymentMode;
   grossIncome: number;
   businessExpenses: number;
+  cisDeductionExclusions: number;
   cisDeductionRate: number;
   contributionMethod: ContributionMethod;
   contributionBasis: ContributionBasis;
   contributionAmount: number;
   employerContributionPercent: number;
   employerMatchPercent: number;
-  jurisdiction: Jurisdiction;
   bands: TaxBands;
-  scottishBands: ScottishBands;
   niBands: NIBands;
   includeNI: boolean;
   class4NI: Class4NIBands;
@@ -212,18 +173,17 @@ export type CalculatorInput = {
 };
 
 export const DEFAULT_INPUT: CalculatorInput = {
-  mode: "employed",
-  grossIncome: 70_000,
-  businessExpenses: 0,
+  mode: "cis",
+  grossIncome: 50_000,
+  businessExpenses: 5_000,
+  cisDeductionExclusions: 0,
   cisDeductionRate: 0.2,
-  contributionMethod: "ras",
-  contributionBasis: "gross",
-  contributionAmount: 3_500,
+  contributionMethod: "sipp",
+  contributionBasis: "net",
+  contributionAmount: 0,
   employerContributionPercent: 3,
   employerMatchPercent: 5,
-  jurisdiction: "rUK",
   bands: { ...DEFAULT_TAX_BANDS },
-  scottishBands: { ...DEFAULT_SCOTTISH_BANDS },
   niBands: { ...DEFAULT_NI_BANDS },
   includeNI: true,
   class4NI: { ...DEFAULT_CLASS4_NI },
@@ -241,43 +201,18 @@ export const DEFAULT_INPUT: CalculatorInput = {
 
 // ---- Regime helpers ----
 
-export function rUKBandsToRegime(bands: TaxBands): TaxRegime {
+export function taxBandsToRegime(bands: TaxBands): TaxRegime {
   return {
     personalAllowance: bands.personalAllowance,
     paTaperStart: bands.paTaperStart,
     paTaperRate: bands.paTaperRate,
     brackets: [
-      { upperBound: bands.higherRateThreshold, rate: bands.basicRate },
+      { upperBound: bands.basicRateThreshold, rate: bands.basicRate },
       { upperBound: bands.additionalRateThreshold, rate: bands.higherRate },
       { upperBound: Infinity, rate: bands.additionalRate },
     ],
     reliefRate: bands.basicRate,
   };
-}
-
-export function scottishBandsToRegime(bands: ScottishBands): TaxRegime {
-  return {
-    personalAllowance: bands.personalAllowance,
-    paTaperStart: bands.paTaperStart,
-    paTaperRate: bands.paTaperRate,
-    brackets: [
-      { upperBound: bands.starterRateUpper, rate: bands.starterRate },
-      { upperBound: bands.basicRateUpper, rate: bands.basicRate },
-      { upperBound: bands.intermediateRateUpper, rate: bands.intermediateRate },
-      { upperBound: bands.higherRateUpper, rate: bands.higherRate },
-      { upperBound: bands.advancedRateUpper, rate: bands.advancedRate },
-      { upperBound: Infinity, rate: bands.topRate },
-    ],
-    // RAS providers claim 20% at source for Scottish residents too — Scottish
-    // taxpayers reconcile the difference (19% / 21% / 42% / 45% / 48%) via SA.
-    reliefRate: 0.2,
-  };
-}
-
-export function regimeFor(input: CalculatorInput): TaxRegime {
-  return input.jurisdiction === "scotland"
-    ? scottishBandsToRegime(input.scottishBands)
-    : rUKBandsToRegime(input.bands);
 }
 
 // PA tapers by £1 for every £2 over the taper start (UK default).
@@ -308,6 +243,8 @@ export type IncomeTaxBreakdown = {
 export type IncomeTaxOptions = {
   // Gross pension contribution that extends the basic-rate band (RAS/SIPP).
   bandExtension?: number;
+  // Adjusted net income used for the Personal Allowance taper.
+  allowanceIncome?: number;
   // Skip PA taper / use a fixed allowance (retirement scenarios).
   overridePA?: number;
 };
@@ -317,13 +254,13 @@ export function calculateIncomeTax(
   regime: TaxRegime,
   options: IncomeTaxOptions = {},
 ): IncomeTaxBreakdown {
+  const allowanceIncome = options.allowanceIncome ?? taxableIncome;
   const effectivePA =
-    options.overridePA ?? effectivePersonalAllowance(taxableIncome, regime);
+    options.overridePA ?? effectivePersonalAllowance(allowanceIncome, regime);
   const extension = options.bandExtension ?? 0;
 
-  // Find the basic-rate bracket so we can extend it (and shift everything
-  // above it up by the same amount). For Scotland the relief bracket is the
-  // 20% band, not the starter rate.
+  // Find the basic-rate bracket so we can extend it and shift everything above
+  // it up by the same amount.
   let extensionStart = regime.brackets.findIndex((b) => b.rate === regime.reliefRate);
   if (extensionStart < 0) extensionStart = 0;
 
@@ -336,7 +273,7 @@ export function calculateIncomeTax(
   }));
 
   let remaining = Math.max(0, taxableIncome - effectivePA);
-  let lowerBound = effectivePA;
+  let lowerBound = 0;
   let totalTax = 0;
   const perBracket: BracketBreakdown[] = [];
   let topMarginalRate = 0;
@@ -428,13 +365,20 @@ export function resolveContribution(
 export type ScenarioBreakdown = {
   grossIncome: number;
   businessExpenses: number;
+  cisDeductionExclusions: number;
+  cisDeductionBase: number;
   taxableIncome: number;
+  taxableAfterAllowance: number;
   effectivePA: number;
   incomeTax: IncomeTaxBreakdown;
   nationalInsurance: number;        // employee Class 1
   class4NI: number;                 // self-employed Class 4
   cisDeducted: number;
+  totalTaxAndNI: number;
+  taxPaidAtSource: number;
   refundOrBalance: number;
+  rebate: number;
+  amountOwed: number;
   pensionOutOfPocket: number;
   adjustedNetIncome: number;        // for HICBC and PA taper context
   hicbc: number;                    // High Income Child Benefit Charge
@@ -447,12 +391,13 @@ function computeScenario(
   regime: TaxRegime,
   contribution: ContributionBreakdown | null,
 ): ScenarioBreakdown {
+  const grossIncome = Math.max(0, input.grossIncome);
   const isSelfEmployedOrCIS =
     input.mode === "selfEmployed" || input.mode === "cis";
   const expenses = isSelfEmployedOrCIS ? Math.max(0, input.businessExpenses) : 0;
   const profitOrSalary = isSelfEmployedOrCIS
-    ? input.grossIncome - expenses
-    : input.grossIncome;
+    ? grossIncome - expenses
+    : grossIncome;
 
   let grossForTax = profitOrSalary;
   let bandExtension = 0;
@@ -476,9 +421,20 @@ function computeScenario(
   }
 
   const taxableIncome = Math.max(0, grossForTax);
-  const incomeTax = calculateIncomeTax(taxableIncome, regime, { bandExtension });
+  let adjustedNetIncome = taxableIncome;
+  if (
+    contribution &&
+    (input.contributionMethod === "ras" || input.contributionMethod === "sipp")
+  ) {
+    adjustedNetIncome = Math.max(0, taxableIncome - contribution.grossContribution);
+  }
 
-  const niable = Math.max(0, input.grossIncome - niableAdjustment);
+  const incomeTax = calculateIncomeTax(taxableIncome, regime, {
+    bandExtension,
+    allowanceIncome: adjustedNetIncome,
+  });
+
+  const niable = Math.max(0, grossIncome - niableAdjustment);
   const nationalInsurance =
     input.mode === "employed" && input.includeNI
       ? calculateNI(niable, input.niBands)
@@ -491,42 +447,45 @@ function computeScenario(
       ? calculateClass4NI(Math.max(0, profitOrSalary), input.class4NI)
       : 0;
 
+  const cisDeductionExclusions =
+    input.mode === "cis"
+      ? Math.min(grossIncome, Math.max(0, input.cisDeductionExclusions))
+      : 0;
+  const cisDeductionBase =
+    input.mode === "cis" ? Math.max(0, grossIncome - cisDeductionExclusions) : 0;
   const cisDeducted =
     input.mode === "cis"
-      ? Math.max(0, input.grossIncome) * Math.max(0, input.cisDeductionRate)
+      ? cisDeductionBase * Math.max(0, input.cisDeductionRate)
       : 0;
 
-  // HICBC uses adjusted net income: taxable income MINUS gross RAS-style
-  // pension contributions (NPA/SS already reduce taxable income directly).
-  let adjustedNetIncome = taxableIncome;
-  if (
-    contribution &&
-    (input.contributionMethod === "ras" || input.contributionMethod === "sipp")
-  ) {
-    adjustedNetIncome = Math.max(0, taxableIncome - contribution.grossContribution);
-  }
   const hicbc = calculateHICBC(adjustedNetIncome, input.hicbc);
-  const refundOrBalance = incomeTax.total + hicbc - cisDeducted;
+  const totalTaxAndNI = incomeTax.total + nationalInsurance + class4NI + hicbc;
+  const taxPaidAtSource = input.mode === "cis" ? cisDeducted : 0;
+  const refundOrBalance = totalTaxAndNI - taxPaidAtSource;
 
   const netCashPosition =
-    input.grossIncome -
+    grossIncome -
     expenses -
-    incomeTax.total -
-    nationalInsurance -
-    class4NI -
-    hicbc -
+    totalTaxAndNI -
     pensionOutOfPocket;
 
   return {
-    grossIncome: input.grossIncome,
+    grossIncome,
     businessExpenses: expenses,
+    cisDeductionExclusions,
+    cisDeductionBase,
     taxableIncome,
+    taxableAfterAllowance: Math.max(0, taxableIncome - incomeTax.effectivePA),
     effectivePA: incomeTax.effectivePA,
     incomeTax,
     nationalInsurance,
     class4NI,
     cisDeducted,
+    totalTaxAndNI,
+    taxPaidAtSource,
     refundOrBalance,
+    rebate: Math.max(0, -refundOrBalance),
+    amountOwed: Math.max(0, refundOrBalance),
     pensionOutOfPocket,
     adjustedNetIncome,
     hicbc,
@@ -535,8 +494,8 @@ function computeScenario(
   };
 }
 
-// SA-claimable relief = total tax saved by extending the relief-rate band,
-// minus the basic-rate piece already claimed at source.
+// SA-claimable relief = income tax saved by relief-at-source / SIPP
+// contributions after the provider's basic-rate top-up.
 function computeHigherRateRelief(
   input: CalculatorInput,
   regime: TaxRegime,
@@ -556,6 +515,7 @@ function computeHigherRateRelief(
   const without = calculateIncomeTax(grossForTax, regime);
   const withExt = calculateIncomeTax(grossForTax, regime, {
     bandExtension: contribution.grossContribution,
+    allowanceIncome: Math.max(0, grossForTax - contribution.grossContribution),
   });
   return Math.max(0, without.total - withExt.total);
 }
@@ -632,6 +592,11 @@ function computeAnnualAllowance(
 
 export type ContributionResult = ContributionBreakdown & {
   higherRateRelief: number;
+  incomeTaxSaved: number;
+  nationalInsuranceSaved: number;
+  hicbcSaved: number;
+  totalSippTaxRelief: number;
+  totalTaxAndBenefitImprovement: number;
   employerContribution: number;
   totalAddedToPension: number;
   effectiveCost: number;
@@ -729,7 +694,7 @@ export type CalculatorResult = {
 };
 
 export function calculate(input: CalculatorInput): CalculatorResult {
-  const regime = regimeFor(input);
+  const regime = taxBandsToRegime(input.bands);
 
   const contribution = resolveContribution(
     input.contributionMethod,
@@ -748,6 +713,22 @@ export function calculate(input: CalculatorInput): CalculatorResult {
   const scenarioWithSipp = computeScenario(input, regime, contribution);
 
   const higherRateRelief = computeHigherRateRelief(input, regime, contribution);
+  const incomeTaxSaved = Math.max(
+    0,
+    scenarioWithoutSipp.incomeTax.total - scenarioWithSipp.incomeTax.total,
+  );
+  const nationalInsuranceSaved = Math.max(
+    0,
+    scenarioWithoutSipp.nationalInsurance -
+      scenarioWithSipp.nationalInsurance,
+  );
+  const hicbcSaved = Math.max(
+    0,
+    scenarioWithoutSipp.hicbc - scenarioWithSipp.hicbc,
+  );
+  const totalSippTaxRelief = contribution.governmentTopUp + incomeTaxSaved;
+  const totalTaxAndBenefitImprovement =
+    totalSippTaxRelief + nationalInsuranceSaved + hicbcSaved;
   const annualAllowance = computeAnnualAllowance(
     input,
     contribution,
@@ -767,6 +748,11 @@ export function calculate(input: CalculatorInput): CalculatorResult {
     contribution: {
       ...contribution,
       higherRateRelief,
+      incomeTaxSaved,
+      nationalInsuranceSaved,
+      hicbcSaved,
+      totalSippTaxRelief,
+      totalTaxAndBenefitImprovement,
       employerContribution,
       totalAddedToPension,
       effectiveCost,
