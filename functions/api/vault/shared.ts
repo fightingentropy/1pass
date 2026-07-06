@@ -58,3 +58,20 @@ export async function ensureVaultTable(db: Env["DB"]) {
     )
     .run();
 }
+
+export async function ensureVaultFilesTable(db: Env["DB"]) {
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS vault_files (id TEXT NOT NULL, chunk_index INTEGER NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (id, chunk_index))",
+    )
+    .run();
+}
+
+export function isValidFileId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= 64 &&
+    /^[a-zA-Z0-9-]+$/.test(value)
+  );
+}

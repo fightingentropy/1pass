@@ -10,6 +10,7 @@ import {
 import {
   DEFAULT_VAULT_PAYLOAD,
   isVaultEncryptedPayload,
+  type VaultAttachment,
   type VaultEncryptedPayload,
   type VaultApiKeyItem,
   type VaultIdentityItem,
@@ -18,8 +19,11 @@ import {
 import "./app.css";
 import {
   createVaultSession,
+  decryptBytes,
   decryptVaultPayload,
+  encryptBytes,
   encryptVaultPayload,
+  isEncryptedChunk,
   restoreVaultSession,
   type VaultSession,
 } from "./vaultCrypto";
@@ -41,7 +45,21 @@ type IdentityDraft = {
   nino: string;
   nhsNumber: string;
   passNumber: string;
+  utr: string;
+  govGatewayId: string;
   notes: string;
+};
+
+type UploadProgress = {
+  name: string;
+  fileIndex: number;
+  fileCount: number;
+  percent: number;
+};
+
+type AttachmentPreview = {
+  attachment: VaultAttachment;
+  url: string;
 };
 
 type ApiKeyDraft = {
@@ -77,6 +95,8 @@ function createIdentityDraft(): IdentityDraft {
     nino: "",
     nhsNumber: "",
     passNumber: "",
+    utr: "",
+    govGatewayId: "",
     notes: "",
   };
 }
@@ -88,6 +108,31 @@ function createApiKeyDraft(): ApiKeyDraft {
     key: "",
     environment: "",
     notes: "",
+  };
+}
+
+function normalizeAttachment(raw: unknown): VaultAttachment | null {
+  if (!raw || typeof raw !== "object") return null;
+  const partial = raw as Partial<VaultAttachment>;
+  if (typeof partial.id !== "string" || partial.id.length === 0) return null;
+  return {
+    id: partial.id,
+    name:
+      typeof partial.name === "string" && partial.name.length > 0
+        ? partial.name
+        : "file",
+    mimeType:
+      typeof partial.mimeType === "string" && partial.mimeType.length > 0
+        ? partial.mimeType
+        : "application/octet-stream",
+    size: typeof partial.size === "number" && partial.size > 0 ? partial.size : 0,
+    chunks:
+      typeof partial.chunks === "number" && partial.chunks > 0
+        ? Math.floor(partial.chunks)
+        : 1,
+    thumb: typeof partial.thumb === "string" ? partial.thumb : "",
+    createdAt:
+      typeof partial.createdAt === "number" ? partial.createdAt : Date.now(),
   };
 }
 
@@ -105,7 +150,14 @@ function normalizeIdentityItem(
     nino: typeof raw.nino === "string" ? raw.nino : "",
     nhsNumber: typeof raw.nhsNumber === "string" ? raw.nhsNumber : "",
     passNumber: typeof raw.passNumber === "string" ? raw.passNumber : "",
+    utr: typeof raw.utr === "string" ? raw.utr : "",
+    govGatewayId: typeof raw.govGatewayId === "string" ? raw.govGatewayId : "",
     notes: typeof raw.notes === "string" ? raw.notes : "",
+    attachments: Array.isArray(raw.attachments)
+      ? raw.attachments
+          .map(normalizeAttachment)
+          .filter((item): item is VaultAttachment => item !== null)
+      : [],
     createdAt: typeof raw.createdAt === "number" ? raw.createdAt : now,
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
   };
@@ -187,7 +239,10 @@ function normalizeVault(payload: unknown): VaultPayload {
         nino: "",
         nhsNumber: "",
         passNumber: "",
+        utr: "",
+        govGatewayId: "",
         notes: "",
+        attachments: [],
         createdAt: now,
         updatedAt: now,
       },
@@ -203,10 +258,64 @@ const IDENTITY_DETAIL_FIELDS = [
   { label: "NINO", field: "nino" },
   { label: "NHS Number", field: "nhsNumber" },
   { label: "Pass No", field: "passNumber" },
+  { label: "UTR", field: "utr" },
+  { label: "Gov Gateway ID", field: "govGatewayId" },
 ] as const;
+
+const ATTACHMENT_CHUNK_SIZE = 1_000_000;
+const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+const ATTACHMENT_THUMB_MAX_EDGE = 320;
+const ATTACHMENT_THUMB_MAX_CHARS = 80_000;
 
 function formatTimestamp(value: number) {
   return new Date(value).toLocaleString();
+}
+
+function formatBytes(value: number) {
+  if (!value) return "Unknown size";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function isImageAttachment(attachment: VaultAttachment) {
+  return attachment.mimeType.startsWith("image/");
+}
+
+function isPdfAttachment(attachment: VaultAttachment) {
+  return attachment.mimeType === "application/pdf";
+}
+
+async function createImageThumb(file: File): Promise<string> {
+  if (!file.type.startsWith("image/")) return "";
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const element = new Image();
+      element.onload = () => resolve(element);
+      element.onerror = () => reject(new Error("Unable to decode image"));
+      element.src = url;
+    });
+
+    const scale = Math.min(
+      1,
+      ATTACHMENT_THUMB_MAX_EDGE / Math.max(image.naturalWidth, image.naturalHeight),
+    );
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) return "";
+    context.drawImage(image, 0, 0, width, height);
+    const thumb = canvas.toDataURL("image/jpeg", 0.72);
+    return thumb.length <= ATTACHMENT_THUMB_MAX_CHARS ? thumb : "";
+  } catch {
+    return "";
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 function maskSecretValue(value: string) {
@@ -302,6 +411,58 @@ async function readVaultStatus() {
   return status;
 }
 
+async function uploadAttachmentBytes(
+  fileId: string,
+  bytes: Uint8Array<ArrayBuffer>,
+  session: VaultSession,
+  onProgress?: (percent: number) => void,
+): Promise<number> {
+  const totalChunks = Math.max(1, Math.ceil(bytes.length / ATTACHMENT_CHUNK_SIZE));
+  for (let index = 0; index < totalChunks; index += 1) {
+    const start = index * ATTACHMENT_CHUNK_SIZE;
+    const chunk = bytes.subarray(start, start + ATTACHMENT_CHUNK_SIZE);
+    const payload = await encryptBytes(chunk, session);
+    await requestJson("/api/vault/files/upload", {
+      method: "POST",
+      body: JSON.stringify({ id: fileId, chunkIndex: index, payload }),
+    });
+    onProgress?.(Math.round(((index + 1) / totalChunks) * 100));
+  }
+  return totalChunks;
+}
+
+async function downloadAttachmentBlob(
+  attachment: VaultAttachment,
+  session: VaultSession,
+): Promise<Blob> {
+  const chunkIndexes = Array.from({ length: attachment.chunks }, (_, i) => i);
+  const parts = await Promise.all(
+    chunkIndexes.map(async (index) => {
+      const data = await requestJson<{ payload: unknown }>(
+        `/api/vault/files/get?id=${encodeURIComponent(attachment.id)}&chunk=${index}`,
+      );
+      if (!isEncryptedChunk(data?.payload)) {
+        throw new Error("File data is missing or corrupted.");
+      }
+      return decryptBytes(data.payload, session);
+    }),
+  );
+  return new Blob(parts as BlobPart[], {
+    type: attachment.mimeType || "application/octet-stream",
+  });
+}
+
+async function deleteAttachmentRemote(fileId: string) {
+  try {
+    await requestJson("/api/vault/files/delete", {
+      method: "POST",
+      body: JSON.stringify({ id: fileId }),
+    });
+  } catch (deleteError) {
+    console.error("Attachment delete failed", deleteError);
+  }
+}
+
 async function unlockVaultWithPassword(password: string) {
   const storedPayload = await loadVaultRecord();
 
@@ -359,6 +520,14 @@ export default function App() {
   const [persistedVaultJson, setPersistedVaultJson] = createSignal(
     JSON.stringify(createVaultDefault()),
   );
+  const [uploadProgress, setUploadProgress] = createSignal<UploadProgress | null>(
+    null,
+  );
+  const [attachmentError, setAttachmentError] = createSignal("");
+  const [attachmentBusyId, setAttachmentBusyId] = createSignal("");
+  const [attachmentPreview, setAttachmentPreview] =
+    createSignal<AttachmentPreview | null>(null);
+  let fileInputRef: HTMLInputElement | undefined;
 
   const isEditing = createMemo(() => editingTarget() !== null);
 
@@ -398,6 +567,8 @@ export default function App() {
         item.nino,
         item.nhsNumber,
         item.passNumber,
+        item.utr,
+        item.govGatewayId,
         item.notes,
       ]
         .join(" ")
@@ -569,6 +740,10 @@ export default function App() {
   };
 
   const handleLock = () => {
+    closeAttachmentPreview();
+    setUploadProgress(null);
+    setAttachmentError("");
+    setAttachmentBusyId("");
     setSyncEnabled(false);
     setSession(null);
     setView("locked");
@@ -609,6 +784,8 @@ export default function App() {
       nino: identity.nino,
       nhsNumber: identity.nhsNumber,
       passNumber: identity.passNumber,
+      utr: identity.utr,
+      govGatewayId: identity.govGatewayId,
       notes: identity.notes,
     });
     setEditingTarget({ section: "identities", id: identity.id });
@@ -636,6 +813,8 @@ export default function App() {
     if (copiedFieldResetTimer) {
       window.clearTimeout(copiedFieldResetTimer);
     }
+    const preview = attachmentPreview();
+    if (preview) URL.revokeObjectURL(preview.url);
   });
 
   const handleCloseModal = () => {
@@ -663,6 +842,8 @@ export default function App() {
     const nextNino = current.nino.trim();
     const nextNhsNumber = current.nhsNumber.trim();
     const nextPassNumber = current.passNumber.trim();
+    const nextUtr = current.utr.trim();
+    const nextGovGatewayId = current.govGatewayId.trim();
     const nextNotes = current.notes.trim();
     const currentTarget = editingTarget();
     const activeEditingId =
@@ -683,6 +864,8 @@ export default function App() {
                 nino: nextNino,
                 nhsNumber: nextNhsNumber,
                 passNumber: nextPassNumber,
+                utr: nextUtr,
+                govGatewayId: nextGovGatewayId,
                 notes: nextNotes,
                 updatedAt: now,
               }
@@ -701,7 +884,10 @@ export default function App() {
         nino: nextNino,
         nhsNumber: nextNhsNumber,
         passNumber: nextPassNumber,
+        utr: nextUtr,
+        govGatewayId: nextGovGatewayId,
         notes: nextNotes,
+        attachments: [],
         createdAt: now,
         updatedAt: now,
       };
@@ -831,13 +1017,189 @@ export default function App() {
 
   const handleDeleteIdentity = (id: string) => {
     if (!window.confirm("Delete this identity? This cannot be undone.")) return;
+    const target = vault().identities.find((item) => item.id === id);
     setVault((currentVault) => ({
       ...currentVault,
       identities: currentVault.identities.filter((item) => item.id !== id),
     }));
+    target?.attachments.forEach((attachment) => {
+      void deleteAttachmentRemote(attachment.id);
+    });
     if (selectedIdentityId() === id) {
       setSelectedIdentityId("");
     }
+  };
+
+  const closeAttachmentPreview = () => {
+    const preview = attachmentPreview();
+    if (preview) URL.revokeObjectURL(preview.url);
+    setAttachmentPreview(null);
+  };
+
+  const handleAddAttachments = async (identityId: string, files: File[]) => {
+    const currentSession = session();
+    if (!currentSession || files.length === 0) return;
+
+    setAttachmentError("");
+    for (const [fileIndex, file] of files.entries()) {
+      const progressBase = {
+        name: file.name,
+        fileIndex: fileIndex + 1,
+        fileCount: files.length,
+      };
+      if (file.size === 0) {
+        setAttachmentError(`"${file.name}" is empty and was skipped.`);
+        continue;
+      }
+      if (file.size > ATTACHMENT_MAX_BYTES) {
+        setAttachmentError(
+          `"${file.name}" is larger than 25 MB and was skipped.`,
+        );
+        continue;
+      }
+
+      const fileId = createId();
+      setUploadProgress({ ...progressBase, percent: 0 });
+      try {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const thumb = await createImageThumb(file);
+        const chunks = await uploadAttachmentBytes(
+          fileId,
+          bytes,
+          currentSession,
+          (percent) => setUploadProgress({ ...progressBase, percent }),
+        );
+
+        const attachment: VaultAttachment = {
+          id: fileId,
+          name: file.name,
+          mimeType: file.type || "application/octet-stream",
+          size: file.size,
+          chunks,
+          thumb,
+          createdAt: Date.now(),
+        };
+
+        if (!vault().identities.some((item) => item.id === identityId)) {
+          void deleteAttachmentRemote(fileId);
+          setAttachmentError("The identity no longer exists.");
+          break;
+        }
+
+        setVault((currentVault) => ({
+          ...currentVault,
+          identities: currentVault.identities.map((item) =>
+            item.id === identityId
+              ? {
+                  ...item,
+                  attachments: [...item.attachments, attachment],
+                  updatedAt: Date.now(),
+                }
+              : item,
+          ),
+        }));
+      } catch (uploadError) {
+        console.error(uploadError);
+        void deleteAttachmentRemote(fileId);
+        setAttachmentError(
+          uploadError instanceof Error
+            ? `Upload of "${file.name}" failed: ${uploadError.message}`
+            : `Upload of "${file.name}" failed.`,
+        );
+      }
+    }
+    setUploadProgress(null);
+  };
+
+  const handleAttachmentInput = (identityId: string, input: HTMLInputElement) => {
+    const files = input.files ? Array.from(input.files) : [];
+    input.value = "";
+    void handleAddAttachments(identityId, files);
+  };
+
+  const triggerBlobDownload = (url: string, name: string) => {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = name;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  };
+
+  const handleOpenAttachment = async (attachment: VaultAttachment) => {
+    const currentSession = session();
+    if (!currentSession || attachmentBusyId()) return;
+
+    setAttachmentError("");
+    setAttachmentBusyId(attachment.id);
+    try {
+      const blob = await downloadAttachmentBlob(attachment, currentSession);
+      const url = URL.createObjectURL(blob);
+      if (isImageAttachment(attachment) || isPdfAttachment(attachment)) {
+        closeAttachmentPreview();
+        setAttachmentPreview({ attachment, url });
+      } else {
+        triggerBlobDownload(url, attachment.name);
+        window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      }
+    } catch (openError) {
+      console.error(openError);
+      setAttachmentError(
+        openError instanceof Error
+          ? openError.message
+          : "Unable to open the file.",
+      );
+    } finally {
+      setAttachmentBusyId("");
+    }
+  };
+
+  const handleDownloadAttachment = async (attachment: VaultAttachment) => {
+    const currentSession = session();
+    if (!currentSession || attachmentBusyId()) return;
+
+    setAttachmentError("");
+    setAttachmentBusyId(attachment.id);
+    try {
+      const blob = await downloadAttachmentBlob(attachment, currentSession);
+      const url = URL.createObjectURL(blob);
+      triggerBlobDownload(url, attachment.name);
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (downloadError) {
+      console.error(downloadError);
+      setAttachmentError(
+        downloadError instanceof Error
+          ? downloadError.message
+          : "Unable to download the file.",
+      );
+    } finally {
+      setAttachmentBusyId("");
+    }
+  };
+
+  const handleDeleteAttachment = (
+    identityId: string,
+    attachment: VaultAttachment,
+  ) => {
+    if (!window.confirm(`Delete "${attachment.name}"? This cannot be undone.`)) {
+      return;
+    }
+    setAttachmentError("");
+    setVault((currentVault) => ({
+      ...currentVault,
+      identities: currentVault.identities.map((item) =>
+        item.id === identityId
+          ? {
+              ...item,
+              attachments: item.attachments.filter(
+                (existing) => existing.id !== attachment.id,
+              ),
+              updatedAt: Date.now(),
+            }
+          : item,
+      ),
+    }));
+    void deleteAttachmentRemote(attachment.id);
   };
 
   const handleDeleteApiKey = (id: string) => {
@@ -1280,6 +1642,187 @@ export default function App() {
                               </p>
                             </div>
                           </div>
+                          <div class="attachments-block">
+                            <div class="attachments-header">
+                              <span class="meta-label">
+                                Attachments
+                                <Show when={identity().attachments.length > 0}>
+                                  {" "}
+                                  ({identity().attachments.length})
+                                </Show>
+                              </span>
+                              <button
+                                class="secret-toggle"
+                                type="button"
+                                disabled={Boolean(uploadProgress())}
+                                onClick={() => fileInputRef?.click()}
+                              >
+                                + Add file
+                              </button>
+                              <input
+                                ref={fileInputRef}
+                                type="file"
+                                multiple
+                                accept="image/*,application/pdf"
+                                class="sr-only"
+                                tabindex={-1}
+                                onChange={(event) =>
+                                  handleAttachmentInput(
+                                    identity().id,
+                                    event.currentTarget,
+                                  )
+                                }
+                              />
+                            </div>
+                            <Show when={uploadProgress()}>
+                              {(progress) => (
+                                <div class="upload-progress">
+                                  <span class="upload-spinner" aria-hidden="true" />
+                                  Encrypting & uploading “{progress().name}”
+                                  <Show when={progress().fileCount > 1}>
+                                    {" "}
+                                    ({progress().fileIndex}/{progress().fileCount})
+                                  </Show>{" "}
+                                  — {progress().percent}%
+                                </div>
+                              )}
+                            </Show>
+                            <Show
+                              when={identity().attachments.length > 0}
+                              fallback={
+                                <p class="attachments-empty">
+                                  No files yet. Add passport scans, photos or PDFs —
+                                  they are encrypted before upload.
+                                </p>
+                              }
+                            >
+                              <div class="attachment-grid">
+                                <For each={identity().attachments}>
+                                  {(attachment) => (
+                                    <div class="attachment-tile">
+                                      <button
+                                        class="attachment-preview"
+                                        type="button"
+                                        title={`Open ${attachment.name}`}
+                                        onClick={() =>
+                                          void handleOpenAttachment(attachment)
+                                        }
+                                      >
+                                        <Show
+                                          when={attachment.thumb}
+                                          fallback={
+                                            <span class="attachment-glyph">
+                                              <Show
+                                                when={isPdfAttachment(attachment)}
+                                                fallback={
+                                                  <Show
+                                                    when={isImageAttachment(attachment)}
+                                                    fallback={
+                                                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                        <path
+                                                          d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Zm0 0v5h5"
+                                                          fill="none"
+                                                          stroke="currentColor"
+                                                          stroke-linecap="round"
+                                                          stroke-linejoin="round"
+                                                          stroke-width="1.6"
+                                                        />
+                                                      </svg>
+                                                    }
+                                                  >
+                                                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                                                      <path
+                                                        d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Zm4.5 4a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM20 15l-4.5-4.5L8 18h12l0-3Z"
+                                                        fill="none"
+                                                        stroke="currentColor"
+                                                        stroke-linecap="round"
+                                                        stroke-linejoin="round"
+                                                        stroke-width="1.6"
+                                                      />
+                                                    </svg>
+                                                  </Show>
+                                                }
+                                              >
+                                                <span class="attachment-badge">PDF</span>
+                                              </Show>
+                                            </span>
+                                          }
+                                        >
+                                          <img
+                                            src={attachment.thumb}
+                                            alt={attachment.name}
+                                            loading="lazy"
+                                          />
+                                        </Show>
+                                        <Show when={attachmentBusyId() === attachment.id}>
+                                          <span class="attachment-loading">
+                                            <span class="upload-spinner" aria-hidden="true" />
+                                          </span>
+                                        </Show>
+                                      </button>
+                                      <div class="attachment-meta">
+                                        <span class="attachment-name" title={attachment.name}>
+                                          {attachment.name}
+                                        </span>
+                                        <span class="attachment-size">
+                                          {formatBytes(attachment.size)}
+                                        </span>
+                                      </div>
+                                      <div class="attachment-actions">
+                                        <button
+                                          class="icon-button icon-only"
+                                          type="button"
+                                          aria-label={`Download ${attachment.name}`}
+                                          title="Download"
+                                          disabled={Boolean(attachmentBusyId())}
+                                          onClick={() =>
+                                            void handleDownloadAttachment(attachment)
+                                          }
+                                        >
+                                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                                            <path
+                                              d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"
+                                              fill="none"
+                                              stroke="currentColor"
+                                              stroke-linecap="round"
+                                              stroke-linejoin="round"
+                                              stroke-width="1.6"
+                                            />
+                                          </svg>
+                                        </button>
+                                        <button
+                                          class="icon-button icon-only"
+                                          type="button"
+                                          aria-label={`Delete ${attachment.name}`}
+                                          title="Delete"
+                                          onClick={() =>
+                                            handleDeleteAttachment(
+                                              identity().id,
+                                              attachment,
+                                            )
+                                          }
+                                        >
+                                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                                            <path
+                                              d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14"
+                                              fill="none"
+                                              stroke="currentColor"
+                                              stroke-linecap="round"
+                                              stroke-linejoin="round"
+                                              stroke-width="1.6"
+                                            />
+                                          </svg>
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </For>
+                              </div>
+                            </Show>
+                            <Show when={Boolean(attachmentError())}>
+                              <div class="form-error">{attachmentError()}</div>
+                            </Show>
+                          </div>
                           <div class="detail-footer">
                             <span class="meta-label">Created</span>
                             <strong>{formatTimestamp(identity().createdAt)}</strong>
@@ -1540,6 +2083,32 @@ export default function App() {
                       }
                     />
                   </label>
+                  <label class="field">
+                    <span class="field-label">UTR</span>
+                    <input
+                      type="text"
+                      value={draft().utr}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          utr: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label class="field">
+                    <span class="field-label">Gov Gateway ID</span>
+                    <input
+                      type="text"
+                      value={draft().govGatewayId}
+                      onInput={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          govGatewayId: event.currentTarget.value,
+                        }))
+                      }
+                    />
+                  </label>
                   <label class="field full">
                     <span class="field-label">Notes</span>
                     <textarea
@@ -1573,6 +2142,62 @@ export default function App() {
             </Show>
           </div>
         </div>
+      </Show>
+
+      <Show when={attachmentPreview()}>
+        {(preview) => (
+          <div class="modal-backdrop preview-backdrop" onClick={closeAttachmentPreview}>
+            <div
+              class="preview-shell"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div class="preview-header">
+                <div class="preview-title">
+                  <strong>{preview().attachment.name}</strong>
+                  <span class="attachment-size">
+                    {formatBytes(preview().attachment.size)}
+                  </span>
+                </div>
+                <div class="preview-actions">
+                  <button
+                    class="secret-toggle"
+                    type="button"
+                    onClick={() =>
+                      triggerBlobDownload(preview().url, preview().attachment.name)
+                    }
+                  >
+                    Download
+                  </button>
+                  <button
+                    class="icon-button"
+                    type="button"
+                    onClick={closeAttachmentPreview}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div class="preview-body">
+                <Show
+                  when={isImageAttachment(preview().attachment)}
+                  fallback={
+                    <iframe
+                      class="preview-frame"
+                      src={preview().url}
+                      title={preview().attachment.name}
+                    />
+                  }
+                >
+                  <img
+                    class="preview-image"
+                    src={preview().url}
+                    alt={preview().attachment.name}
+                  />
+                </Show>
+              </div>
+            </div>
+          </div>
+        )}
       </Show>
     </div>
   );

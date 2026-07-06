@@ -17,3 +17,6 @@ yarn-error.log*
 .DS_Store
 *.swp
 *.swo
+
+# Wrangler local dev state
+.wrangler/

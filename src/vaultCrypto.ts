@@ -13,11 +13,13 @@ export type VaultSession = {
 };
 
 function bytesToBase64(bytes: Uint8Array) {
-  let binary = "";
-  for (const byte of bytes) {
-    binary += String.fromCharCode(byte);
+  const parts: string[] = [];
+  const sliceSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += sliceSize) {
+    const slice = bytes.subarray(offset, offset + sliceSize);
+    parts.push(String.fromCharCode(...slice));
   }
-  return btoa(binary);
+  return btoa(parts.join(""));
 }
 
 function base64ToBytes(value: string) {
@@ -116,4 +118,50 @@ export async function decryptVaultPayload(
   );
 
   return JSON.parse(decoder.decode(plaintext));
+}
+
+export type EncryptedChunk = {
+  iv: string;
+  ciphertext: string;
+};
+
+export function isEncryptedChunk(value: unknown): value is EncryptedChunk {
+  if (!value || typeof value !== "object") return false;
+  const chunk = value as Partial<EncryptedChunk>;
+  return (
+    typeof chunk.iv === "string" &&
+    chunk.iv.length > 0 &&
+    typeof chunk.ciphertext === "string" &&
+    chunk.ciphertext.length > 0
+  );
+}
+
+export async function encryptBytes(
+  bytes: Uint8Array<ArrayBuffer>,
+  session: VaultSession,
+): Promise<EncryptedChunk> {
+  const iv = createRandomBytes(12);
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    session.key,
+    bytes,
+  );
+
+  return {
+    iv: bytesToBase64(iv),
+    ciphertext: bytesToBase64(new Uint8Array(ciphertext)),
+  };
+}
+
+export async function decryptBytes(
+  chunk: EncryptedChunk,
+  session: VaultSession,
+): Promise<Uint8Array> {
+  const plaintext = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: base64ToBytes(chunk.iv) },
+    session.key,
+    base64ToBytes(chunk.ciphertext),
+  );
+
+  return new Uint8Array(plaintext);
 }

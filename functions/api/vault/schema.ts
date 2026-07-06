@@ -1,3 +1,13 @@
+export type VaultAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  chunks: number;
+  thumb: string;
+  createdAt: number;
+};
+
 export type VaultIdentityItem = {
   id: string;
   firstName: string;
@@ -8,7 +18,10 @@ export type VaultIdentityItem = {
   nino: string;
   nhsNumber: string;
   passNumber: string;
+  utr: string;
+  govGatewayId: string;
   notes: string;
+  attachments: VaultAttachment[];
   createdAt: number;
   updatedAt: number;
 };
