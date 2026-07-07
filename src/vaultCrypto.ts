@@ -7,9 +7,18 @@ import {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+const HKDF_SALT = "1pass/hkdf/v2";
+const HKDF_INFO_ENCRYPTION = "1pass/enc/v2";
+const HKDF_INFO_AUTH = "1pass/auth/v2";
+
 export type VaultSession = {
   key: CryptoKey;
   kdf: VaultEncryptedPayload["kdf"];
+  version: 1 | 2;
+  // Sent as a bearer token so the server can gate reads/writes. Derived from
+  // the password via a separate HKDF branch, so it reveals nothing about the
+  // encryption key. Empty string for unmigrated v1 sessions.
+  authToken: string;
 };
 
 function bytesToBase64(bytes: Uint8Array) {
@@ -39,11 +48,11 @@ async function deriveKeyMaterial(password: string) {
     encoder.encode(password),
     "PBKDF2",
     false,
-    ["deriveKey"],
+    ["deriveKey", "deriveBits"],
   );
 }
 
-async function deriveVaultKey(
+async function deriveLegacyVaultKey(
   password: string,
   kdf: VaultEncryptedPayload["kdf"],
 ) {
@@ -62,6 +71,53 @@ async function deriveVaultKey(
   );
 }
 
+async function deriveV2Material(
+  password: string,
+  kdf: VaultEncryptedPayload["kdf"],
+) {
+  const keyMaterial = await deriveKeyMaterial(password);
+  const baseBits = await crypto.subtle.deriveBits(
+    {
+      name: "PBKDF2",
+      hash: kdf.hash,
+      salt: base64ToBytes(kdf.salt),
+      iterations: kdf.iterations,
+    },
+    keyMaterial,
+    256,
+  );
+  const hkdfKey = await crypto.subtle.importKey("raw", baseBits, "HKDF", false, [
+    "deriveKey",
+    "deriveBits",
+  ]);
+
+  const key = await crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: encoder.encode(HKDF_SALT),
+      info: encoder.encode(HKDF_INFO_ENCRYPTION),
+    },
+    hkdfKey,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+
+  const authBits = await crypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: encoder.encode(HKDF_SALT),
+      info: encoder.encode(HKDF_INFO_AUTH),
+    },
+    hkdfKey,
+    256,
+  );
+
+  return { key, authToken: bytesToBase64(new Uint8Array(authBits)) };
+}
+
 export async function createVaultSession(password: string): Promise<VaultSession> {
   const kdf: VaultEncryptedPayload["kdf"] = {
     name: "PBKDF2",
@@ -70,19 +126,24 @@ export async function createVaultSession(password: string): Promise<VaultSession
     salt: bytesToBase64(createRandomBytes(16)),
   };
 
-  return {
-    key: await deriveVaultKey(password, kdf),
-    kdf,
-  };
+  const { key, authToken } = await deriveV2Material(password, kdf);
+  return { key, kdf, version: 2, authToken };
 }
 
 export async function restoreVaultSession(
   password: string,
-  payload: VaultEncryptedPayload,
+  meta: { version: number; kdf: VaultEncryptedPayload["kdf"] },
 ): Promise<VaultSession> {
+  if (meta.version >= 2) {
+    const { key, authToken } = await deriveV2Material(password, meta.kdf);
+    return { key, kdf: meta.kdf, version: 2, authToken };
+  }
+
   return {
-    key: await deriveVaultKey(password, payload.kdf),
-    kdf: payload.kdf,
+    key: await deriveLegacyVaultKey(password, meta.kdf),
+    kdf: meta.kdf,
+    version: 1,
+    authToken: "",
   };
 }
 
@@ -99,7 +160,7 @@ export async function encryptVaultPayload(
   );
 
   return {
-    version: 1,
+    version: session.version,
     format: "aes-gcm",
     kdf: session.kdf,
     iv: bytesToBase64(iv),

@@ -1,5 +1,6 @@
 import {
   DEFAULT_VAULT_ID,
+  checkVaultAuth,
   ensureVaultFilesTable,
   ensureVaultTable,
   errorResponse,
@@ -58,6 +59,10 @@ export async function onRequestPost({
 
     const db = getDb(env);
     await ensureVaultTable(db);
+
+    const authFailure = await checkVaultAuth(request, db, env);
+    if (authFailure) return authFailure;
+
     const vault = await db
       .prepare("SELECT id FROM vaults WHERE id = ?1")
       .bind(DEFAULT_VAULT_ID)

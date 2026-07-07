@@ -1707,3 +1707,319 @@ body::after {
     border-radius: 12px;
     background: #18181b;
 }
+
+/* Password inputs (gate + credential modal) */
+.password-input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.password-input-wrap input {
+    width: 100%;
+    padding-right: 76px;
+}
+
+.password-input-wrap .password-reveal {
+    position: absolute;
+    right: 8px;
+}
+
+.password-input-wrap .password-input-actions {
+    position: absolute;
+    right: 8px;
+    display: flex;
+    gap: 6px;
+}
+
+.password-input-wrap .password-input-actions .password-reveal {
+    position: static;
+}
+
+.password-reveal {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    cursor: pointer;
+    padding: 6px 8px;
+    border-radius: 8px;
+    transition: color 0.18s, background 0.18s;
+}
+
+.password-reveal:hover {
+    color: var(--foreground);
+    background: #1a1a1f;
+}
+
+/* Sync status pill */
+.sync-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #86efac;
+    border-color: #14532d;
+    background: #04170c;
+}
+
+.sync-pill.busy {
+    color: #fcd34d;
+    border-color: #713f12;
+    background: #1a1206;
+}
+
+.sync-pill.error {
+    color: #fca5a5;
+    border-color: #7f1d1d;
+    background: #2a0a0a;
+    cursor: pointer;
+    font-family: inherit;
+}
+
+.sync-pill.error:hover {
+    background: #3b0f0f;
+}
+
+/* Confirm dialog */
+.confirm-backdrop {
+    z-index: 80;
+}
+
+.confirm-dialog {
+    width: min(420px, 92vw);
+    padding: 24px;
+    border-radius: 18px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    box-shadow: var(--shadow);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.confirm-dialog h3 {
+    margin: 0;
+    font-size: 17px;
+    letter-spacing: -0.01em;
+}
+
+.confirm-dialog p {
+    margin: 0 0 10px;
+    color: var(--muted-foreground);
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.btn.primary.danger {
+    background: #dc2626;
+    color: #fef2f2;
+}
+
+.btn.primary.danger:hover {
+    background: #b91c1c;
+}
+
+/* Identity list avatars + badges */
+.avatar {
+    flex: none;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #1a1a1f;
+    border: 1px solid var(--border);
+    color: var(--muted-foreground);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.list-item.active .avatar {
+    background: #27272a;
+    color: var(--foreground);
+}
+
+.list-item > div {
+    flex: 1;
+    min-width: 0;
+}
+
+.list-item > div strong,
+.list-item > div .muted {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.list-item-end {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.count-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: #0f0f10;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.count-badge svg {
+    width: 12px;
+    height: 12px;
+}
+
+/* Empty states */
+.empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 4px;
+}
+
+.empty-state .empty {
+    margin: 0;
+}
+
+/* Credentials (passwords per identity) */
+.credentials-block {
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.credential-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.credential-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: #0f0f10;
+}
+
+.credential-icon {
+    flex: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 10px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #1a1a1f;
+    color: var(--muted);
+}
+
+.credential-icon svg {
+    width: 16px;
+    height: 16px;
+}
+
+.credential-info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.credential-info strong {
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.credential-info .muted {
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.copyable-inline {
+    cursor: pointer;
+    border-radius: 8px;
+    padding: 2px 6px;
+    margin: -2px -6px;
+    transition: background 0.18s;
+}
+
+.copyable-inline:hover {
+    background: #17171b;
+}
+
+.credential-password {
+    flex: none;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: "JetBrains Mono", "SFMono-Regular", monospace;
+    font-size: 13px;
+}
+
+.credential-password.masked {
+    color: var(--muted);
+    letter-spacing: 0.08em;
+}
+
+.credential-actions {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.credential-actions .icon-button.icon-only {
+    width: 28px;
+    height: 28px;
+}
+
+.credential-actions .icon-button.icon-only svg {
+    width: 14px;
+    height: 14px;
+}
+
+.icon-button.icon-only.is-success {
+    color: #86efac;
+    border-color: #14532d;
+    background: #04170c;
+}
+
+/* Attachment drop target */
+.attachments-block.drag-active {
+    outline: 2px dashed #3f3f46;
+    outline-offset: 6px;
+    border-radius: 12px;
+    background: #0c0c0e;
+}
+
+@media (max-width: 760px) {
+    .credential-password {
+        display: none;
+    }
+}

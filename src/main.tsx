@@ -1,7 +1,9 @@
+import { lazy, Suspense } from "solid-js";
 import { render } from "solid-js/web";
 import App from "./App";
-import TaxCalculator from "./tax/TaxCalculator";
 import "./app.css";
+
+const TaxCalculator = lazy(() => import("./tax/TaxCalculator"));
 
 const root = document.getElementById("root");
 
@@ -15,5 +17,12 @@ function pickRoute() {
 
 if (root) {
   const Route = pickRoute();
-  render(() => <Route />, root);
+  render(
+    () => (
+      <Suspense fallback={null}>
+        <Route />
+      </Suspense>
+    ),
+    root,
+  );
 }

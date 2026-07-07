@@ -20,3 +20,6 @@ yarn-error.log*
 
 # Wrangler local dev state
 .wrangler/
+
+# assistant Code local config
+.assistant/

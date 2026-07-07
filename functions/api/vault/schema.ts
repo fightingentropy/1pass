@@ -8,6 +8,17 @@ export type VaultAttachment = {
   createdAt: number;
 };
 
+export type VaultCredential = {
+  id: string;
+  label: string;
+  username: string;
+  password: string;
+  website: string;
+  notes: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type VaultIdentityItem = {
   id: string;
   firstName: string;
@@ -22,6 +33,7 @@ export type VaultIdentityItem = {
   govGatewayId: string;
   notes: string;
   attachments: VaultAttachment[];
+  credentials: VaultCredential[];
   createdAt: number;
   updatedAt: number;
 };
@@ -40,10 +52,20 @@ export type VaultApiKeyItem = {
 export type VaultPayload = {
   identities: VaultIdentityItem[];
   apiKeys: VaultApiKeyItem[];
+  // Present only while a v1→v2 attachment re-encryption is in flight: stores
+  // the OLD (v1) KDF parameters so an interrupted migration can resume with
+  // both keys derivable. Stripped again by the save that ends the migration.
+  pendingMigration?: {
+    kdf: VaultEncryptedPayload["kdf"];
+  };
 };
 
+// version 1: AES key derived directly from the password via PBKDF2.
+// version 2: PBKDF2 derives 256 base bits, then HKDF-SHA256 expands them into
+// the AES-GCM key and a separate API auth token, so the server can gate writes
+// without ever learning anything about the encryption key.
 export type VaultEncryptedPayload = {
-  version: 1;
+  version: 1 | 2;
   format: "aes-gcm";
   kdf: {
     name: "PBKDF2";
@@ -55,12 +77,20 @@ export type VaultEncryptedPayload = {
   ciphertext: string;
 };
 
+export type VaultMeta = {
+  exists: boolean;
+  version?: number;
+  kdf?: VaultEncryptedPayload["kdf"];
+};
+
 export const DEFAULT_VAULT_PAYLOAD: VaultPayload = {
   identities: [],
   apiKeys: [],
 };
 
-export const VAULT_KDF_ITERATIONS = 310_000;
+export const VAULT_KDF_ITERATIONS = 600_000;
+
+export const VAULT_AUTH_HEADER = "x-vault-auth";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -74,7 +104,7 @@ export function isVaultEncryptedPayload(
   }
 
   return (
-    value.version === 1 &&
+    (value.version === 1 || value.version === 2) &&
     value.format === "aes-gcm" &&
     value.kdf.name === "PBKDF2" &&
     value.kdf.hash === "SHA-256" &&

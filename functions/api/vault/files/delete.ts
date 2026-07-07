@@ -1,5 +1,7 @@
 import {
+  checkVaultAuth,
   ensureVaultFilesTable,
+  ensureVaultTable,
   errorResponse,
   getDb,
   isValidFileId,
@@ -27,6 +29,11 @@ export async function onRequestPost({
     }
 
     const db = getDb(env);
+    await ensureVaultTable(db);
+
+    const authFailure = await checkVaultAuth(request, db, env);
+    if (authFailure) return authFailure;
+
     await ensureVaultFilesTable(db);
     await db
       .prepare("DELETE FROM vault_files WHERE id = ?1")

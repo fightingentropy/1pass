@@ -1,5 +1,6 @@
 import {
   DEFAULT_VAULT_ID,
+  checkVaultAuth,
   ensureVaultTable,
   errorResponse,
   getDb,
@@ -12,10 +13,20 @@ export function onRequestOptions({ env }: { env: Env }) {
   return optionsResponse(env);
 }
 
-export async function onRequestGet({ env }: { env: Env }) {
+export async function onRequestGet({
+  request,
+  env,
+}: {
+  request: Request;
+  env: Env;
+}) {
   try {
     const db = getDb(env);
     await ensureVaultTable(db);
+
+    const authFailure = await checkVaultAuth(request, db, env);
+    if (authFailure) return authFailure;
+
     const row = await db
       .prepare("SELECT payload FROM vaults WHERE id = ?1")
       .bind(DEFAULT_VAULT_ID)

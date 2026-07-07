@@ -6,27 +6,68 @@ import {
   onCleanup,
   onMount,
   Show,
+  untrack,
 } from "solid-js";
 import {
-  DEFAULT_VAULT_PAYLOAD,
   isVaultEncryptedPayload,
   type VaultAttachment,
+  type VaultCredential,
   type VaultEncryptedPayload,
-  type VaultApiKeyItem,
   type VaultIdentityItem,
+  type VaultApiKeyItem,
   type VaultPayload,
 } from "../functions/api/vault/schema";
 import "./app.css";
 import {
   createVaultSession,
-  decryptBytes,
   decryptVaultPayload,
-  encryptBytes,
   encryptVaultPayload,
-  isEncryptedChunk,
   restoreVaultSession,
   type VaultSession,
 } from "./vaultCrypto";
+import {
+  deleteAttachmentRemote,
+  downloadAttachmentBlob,
+  initVault,
+  isUnauthorizedError,
+  loadVaultRecord,
+  migrateAttachmentEncryption,
+  readVaultMeta,
+  saveVaultRecord,
+  uploadAttachmentBytes,
+} from "./vault/api";
+import {
+  ATTACHMENT_MAX_BYTES,
+  AUTO_LOCK_MS,
+  CLIPBOARD_CLEAR_MS,
+  SAVE_DEBOUNCE_MS,
+  createApiKeyDraft,
+  createCredentialDraft,
+  createId,
+  createIdentityDraft,
+  createImageThumb,
+  createVaultDefault,
+  identityInitials,
+  normalizeVault,
+  triggerBlobDownload,
+  type ApiKeyDraft,
+  type AttachmentPreviewState,
+  type ConfirmRequest,
+  type CredentialDraft,
+  type CredentialModalState,
+  type EditingTarget,
+  type IdentityDraft,
+  type SyncState,
+  type UploadProgress,
+  type VaultSection,
+} from "./vault/types";
+import Gate from "./vault/Gate";
+import ConfirmDialog from "./vault/ConfirmDialog";
+import AttachmentPreviewOverlay from "./vault/AttachmentPreviewOverlay";
+import IdentityDetail from "./vault/IdentityDetail";
+import ApiKeyDetail from "./vault/ApiKeyDetail";
+import { ApiKeyModal, CredentialModal, IdentityModal } from "./vault/Modals";
+import { KeyIcon, PaperclipIcon } from "./vault/icons";
 
 const LEGACY_STORAGE_KEYS = {
   passwordHash: "vault.password.hash",
@@ -34,295 +75,6 @@ const LEGACY_STORAGE_KEYS = {
 };
 
 type GateView = "loading" | "setup" | "locked" | "unlocked";
-type VaultSection = "identities" | "apiKeys";
-
-type IdentityDraft = {
-  firstName: string;
-  lastName: string;
-  email: string;
-  phone: string;
-  address: string;
-  nino: string;
-  nhsNumber: string;
-  passNumber: string;
-  utr: string;
-  govGatewayId: string;
-  notes: string;
-};
-
-type UploadProgress = {
-  name: string;
-  fileIndex: number;
-  fileCount: number;
-  percent: number;
-};
-
-type AttachmentPreview = {
-  attachment: VaultAttachment;
-  url: string;
-};
-
-type ApiKeyDraft = {
-  label: string;
-  service: string;
-  key: string;
-  environment: string;
-  notes: string;
-};
-
-type EditingTarget =
-  | { section: "identities"; id: string }
-  | { section: "apiKeys"; id: string };
-
-function createVaultDefault(): VaultPayload {
-  return JSON.parse(JSON.stringify(DEFAULT_VAULT_PAYLOAD)) as VaultPayload;
-}
-
-function createId() {
-  if (typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-}
-
-function createIdentityDraft(): IdentityDraft {
-  return {
-    firstName: "",
-    lastName: "",
-    email: "",
-    phone: "",
-    address: "",
-    nino: "",
-    nhsNumber: "",
-    passNumber: "",
-    utr: "",
-    govGatewayId: "",
-    notes: "",
-  };
-}
-
-function createApiKeyDraft(): ApiKeyDraft {
-  return {
-    label: "",
-    service: "",
-    key: "",
-    environment: "",
-    notes: "",
-  };
-}
-
-function normalizeAttachment(raw: unknown): VaultAttachment | null {
-  if (!raw || typeof raw !== "object") return null;
-  const partial = raw as Partial<VaultAttachment>;
-  if (typeof partial.id !== "string" || partial.id.length === 0) return null;
-  return {
-    id: partial.id,
-    name:
-      typeof partial.name === "string" && partial.name.length > 0
-        ? partial.name
-        : "file",
-    mimeType:
-      typeof partial.mimeType === "string" && partial.mimeType.length > 0
-        ? partial.mimeType
-        : "application/octet-stream",
-    size: typeof partial.size === "number" && partial.size > 0 ? partial.size : 0,
-    chunks:
-      typeof partial.chunks === "number" && partial.chunks > 0
-        ? Math.floor(partial.chunks)
-        : 1,
-    thumb: typeof partial.thumb === "string" ? partial.thumb : "",
-    createdAt:
-      typeof partial.createdAt === "number" ? partial.createdAt : Date.now(),
-  };
-}
-
-function normalizeIdentityItem(
-  raw: Partial<VaultIdentityItem>,
-): VaultIdentityItem {
-  const now = Date.now();
-  return {
-    id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : createId(),
-    firstName: typeof raw.firstName === "string" ? raw.firstName : "",
-    lastName: typeof raw.lastName === "string" ? raw.lastName : "",
-    email: typeof raw.email === "string" ? raw.email : "",
-    phone: typeof raw.phone === "string" ? raw.phone : "",
-    address: typeof raw.address === "string" ? raw.address : "",
-    nino: typeof raw.nino === "string" ? raw.nino : "",
-    nhsNumber: typeof raw.nhsNumber === "string" ? raw.nhsNumber : "",
-    passNumber: typeof raw.passNumber === "string" ? raw.passNumber : "",
-    utr: typeof raw.utr === "string" ? raw.utr : "",
-    govGatewayId: typeof raw.govGatewayId === "string" ? raw.govGatewayId : "",
-    notes: typeof raw.notes === "string" ? raw.notes : "",
-    attachments: Array.isArray(raw.attachments)
-      ? raw.attachments
-          .map(normalizeAttachment)
-          .filter((item): item is VaultAttachment => item !== null)
-      : [],
-    createdAt: typeof raw.createdAt === "number" ? raw.createdAt : now,
-    updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
-  };
-}
-
-function normalizeApiKeyItem(raw: Partial<VaultApiKeyItem>): VaultApiKeyItem {
-  const now = Date.now();
-  return {
-    id: typeof raw.id === "string" && raw.id.length > 0 ? raw.id : createId(),
-    label: typeof raw.label === "string" ? raw.label : "",
-    service: typeof raw.service === "string" ? raw.service : "",
-    key: typeof raw.key === "string" ? raw.key : "",
-    environment: typeof raw.environment === "string" ? raw.environment : "",
-    notes: typeof raw.notes === "string" ? raw.notes : "",
-    createdAt: typeof raw.createdAt === "number" ? raw.createdAt : now,
-    updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : now,
-  };
-}
-
-function normalizeVault(payload: unknown): VaultPayload {
-  if (!payload || typeof payload !== "object") {
-    return createVaultDefault();
-  }
-
-  const partial = payload as Partial<VaultPayload> & {
-    profile?: {
-      fullName?: string;
-      preferredName?: string;
-      primaryAddress?: string;
-    };
-    contacts?: { primaryEmail?: string; phone?: string };
-  };
-
-  if (Array.isArray(partial.identities)) {
-    return {
-      identities: partial.identities.map((item) =>
-        normalizeIdentityItem(item as Partial<VaultIdentityItem>),
-      ),
-      apiKeys: Array.isArray(partial.apiKeys)
-        ? partial.apiKeys.map((item) =>
-            normalizeApiKeyItem(item as Partial<VaultApiKeyItem>),
-          )
-        : [],
-    };
-  }
-
-  const legacyName =
-    typeof partial.profile?.fullName === "string" &&
-    partial.profile.fullName.trim().length > 0
-      ? partial.profile.fullName.trim()
-      : typeof partial.profile?.preferredName === "string"
-        ? partial.profile.preferredName.trim()
-        : "";
-
-  if (!legacyName) {
-    return createVaultDefault();
-  }
-
-  const [firstName, ...rest] = legacyName.split(/\s+/);
-  const now = Date.now();
-  return {
-    identities: [
-      {
-        id: createId(),
-        firstName: firstName ?? "",
-        lastName: rest.join(" "),
-        email:
-          typeof partial.contacts?.primaryEmail === "string"
-            ? partial.contacts.primaryEmail
-            : "",
-        phone:
-          typeof partial.contacts?.phone === "string"
-            ? partial.contacts.phone
-            : "",
-        address:
-          typeof partial.profile?.primaryAddress === "string"
-            ? partial.profile.primaryAddress
-            : "",
-        nino: "",
-        nhsNumber: "",
-        passNumber: "",
-        utr: "",
-        govGatewayId: "",
-        notes: "",
-        attachments: [],
-        createdAt: now,
-        updatedAt: now,
-      },
-    ],
-    apiKeys: [],
-  };
-}
-
-const IDENTITY_DETAIL_FIELDS = [
-  { label: "Email", field: "email" },
-  { label: "Phone", field: "phone" },
-  { label: "Address", field: "address" },
-  { label: "NINO", field: "nino" },
-  { label: "NHS Number", field: "nhsNumber" },
-  { label: "Pass No", field: "passNumber" },
-  { label: "UTR", field: "utr" },
-  { label: "Gov Gateway ID", field: "govGatewayId" },
-] as const;
-
-const ATTACHMENT_CHUNK_SIZE = 1_000_000;
-const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
-const ATTACHMENT_THUMB_MAX_EDGE = 320;
-const ATTACHMENT_THUMB_MAX_CHARS = 80_000;
-
-function formatTimestamp(value: number) {
-  return new Date(value).toLocaleString();
-}
-
-function formatBytes(value: number) {
-  if (!value) return "Unknown size";
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function isImageAttachment(attachment: VaultAttachment) {
-  return attachment.mimeType.startsWith("image/");
-}
-
-function isPdfAttachment(attachment: VaultAttachment) {
-  return attachment.mimeType === "application/pdf";
-}
-
-async function createImageThumb(file: File): Promise<string> {
-  if (!file.type.startsWith("image/")) return "";
-  const url = URL.createObjectURL(file);
-  try {
-    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const element = new Image();
-      element.onload = () => resolve(element);
-      element.onerror = () => reject(new Error("Unable to decode image"));
-      element.src = url;
-    });
-
-    const scale = Math.min(
-      1,
-      ATTACHMENT_THUMB_MAX_EDGE / Math.max(image.naturalWidth, image.naturalHeight),
-    );
-    const width = Math.max(1, Math.round(image.naturalWidth * scale));
-    const height = Math.max(1, Math.round(image.naturalHeight * scale));
-    const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) return "";
-    context.drawImage(image, 0, 0, width, height);
-    const thumb = canvas.toDataURL("image/jpeg", 0.72);
-    return thumb.length <= ATTACHMENT_THUMB_MAX_CHARS ? thumb : "";
-  } catch {
-    return "";
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-function maskSecretValue(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return "Not provided";
-  return "*".repeat(Math.max(12, Math.min(trimmed.length, 24)));
-}
 
 async function hashLegacyPassword(password: string, salt: string) {
   const encoded = new TextEncoder().encode(`${salt}:${password}`);
@@ -344,166 +96,214 @@ function clearLegacyPasswordMeta() {
   localStorage.removeItem(LEGACY_STORAGE_KEYS.passwordSalt);
 }
 
-const apiBase = (import.meta.env.VITE_API_BASE as string | undefined)
-  ?.trim()
-  .replace(/\/+$/, "");
-
-async function requestJson<T>(path: string, init?: RequestInit) {
-  const url = apiBase ? `${apiBase}${path}` : path;
-  const headers: Record<string, string> = {
-    ...(init?.headers as Record<string, string> ?? {}),
-  };
-  if (init?.body) {
-    headers["content-type"] = "application/json";
+function readPendingMigrationKdf(
+  decrypted: unknown,
+): VaultEncryptedPayload["kdf"] | null {
+  if (!decrypted || typeof decrypted !== "object") return null;
+  const pending = (decrypted as Partial<VaultPayload>).pendingMigration;
+  const kdf = pending?.kdf;
+  if (
+    kdf &&
+    kdf.name === "PBKDF2" &&
+    kdf.hash === "SHA-256" &&
+    typeof kdf.iterations === "number" &&
+    kdf.iterations > 0 &&
+    typeof kdf.salt === "string" &&
+    kdf.salt.length > 0
+  ) {
+    return kdf;
   }
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  });
+  return null;
+}
 
-  const text = await response.text();
-  let data = null as T;
-  if (text) {
+// Re-encrypts every attachment chunk from the old key to the new one.
+// Per-chunk this is idempotent (old-key decrypt, falling back to new-key for
+// chunks an earlier interrupted run already converted). Returns the number of
+// attachments that could not be migrated instead of throwing, so a broken
+// file can never brick the unlock flow.
+async function reencryptAllAttachments(
+  vault: VaultPayload,
+  oldSession: VaultSession,
+  newSession: VaultSession,
+  onProgress: (label: string) => void,
+): Promise<number> {
+  const attachments = vault.identities.flatMap(
+    (identity) => identity.attachments,
+  );
+  let failed = 0;
+  for (const [index, attachment] of attachments.entries()) {
+    onProgress(`Re-encrypting files (${index + 1}/${attachments.length})…`);
     try {
-      data = JSON.parse(text) as T;
-    } catch {
-      data = null as T;
+      await migrateAttachmentEncryption(attachment, oldSession, newSession);
+    } catch (migrateError) {
+      console.error(
+        `Attachment migration failed for "${attachment.name}"`,
+        migrateError,
+      );
+      failed += 1;
     }
   }
-
-  if (!response.ok) {
-    const message =
-      typeof (data as { error?: string } | null)?.error === "string"
-        ? (data as { error: string }).error
-        : `Request failed (${response.status})`;
-    throw new Error(message);
-  }
-
-  return data;
+  return failed;
 }
 
-async function initVault(payload: VaultEncryptedPayload) {
-  await requestJson("/api/vault/init", {
-    method: "POST",
-    body: JSON.stringify({ payload }),
-  });
-}
+// Two-phase v1→v2 upgrade. The new KDF salt is persisted (inside the v2
+// envelope, alongside a pendingMigration marker holding the old KDF) BEFORE
+// any attachment chunk is touched — so every key that ever encrypts a chunk
+// is durably stored first, and an interrupted migration resumes losslessly
+// on the next unlock instead of stranding chunks under a lost key.
+async function migrateVaultToV2(
+  password: string,
+  vault: VaultPayload,
+  oldSession: VaultSession,
+  onProgress: (label: string) => void,
+): Promise<VaultSession> {
+  onProgress("Upgrading vault security…");
+  const nextSession = await createVaultSession(password);
 
-async function loadVaultRecord() {
-  const data = await requestJson<{ payload: unknown }>("/api/vault/load");
-  return data.payload;
-}
-
-async function saveVaultRecord(payload: VaultEncryptedPayload) {
-  await requestJson("/api/vault/save", {
-    method: "POST",
-    body: JSON.stringify({ payload }),
-  });
-}
-
-async function readVaultStatus() {
-  const status = await requestJson<{ exists: boolean } | null>(
-    "/api/vault/status",
+  // Phase 1: persist the new envelope with a resume marker.
+  const markedPayload = await encryptVaultPayload(
+    { ...vault, pendingMigration: { kdf: oldSession.kdf } },
+    nextSession,
   );
-  if (!status || typeof status.exists !== "boolean") {
-    throw new Error("Unable to read vault status.");
-  }
-  return status;
-}
+  await saveVaultRecord(markedPayload, nextSession.authToken);
 
-async function uploadAttachmentBytes(
-  fileId: string,
-  bytes: Uint8Array<ArrayBuffer>,
-  session: VaultSession,
-  onProgress?: (percent: number) => void,
-): Promise<number> {
-  const totalChunks = Math.max(1, Math.ceil(bytes.length / ATTACHMENT_CHUNK_SIZE));
-  for (let index = 0; index < totalChunks; index += 1) {
-    const start = index * ATTACHMENT_CHUNK_SIZE;
-    const chunk = bytes.subarray(start, start + ATTACHMENT_CHUNK_SIZE);
-    const payload = await encryptBytes(chunk, session);
-    await requestJson("/api/vault/files/upload", {
-      method: "POST",
-      body: JSON.stringify({ id: fileId, chunkIndex: index, payload }),
-    });
-    onProgress?.(Math.round(((index + 1) / totalChunks) * 100));
-  }
-  return totalChunks;
-}
-
-async function downloadAttachmentBlob(
-  attachment: VaultAttachment,
-  session: VaultSession,
-): Promise<Blob> {
-  const chunkIndexes = Array.from({ length: attachment.chunks }, (_, i) => i);
-  const parts = await Promise.all(
-    chunkIndexes.map(async (index) => {
-      const data = await requestJson<{ payload: unknown }>(
-        `/api/vault/files/get?id=${encodeURIComponent(attachment.id)}&chunk=${index}`,
-      );
-      if (!isEncryptedChunk(data?.payload)) {
-        throw new Error("File data is missing or corrupted.");
-      }
-      return decryptBytes(data.payload, session);
-    }),
+  // Phase 2: re-encrypt attachment chunks under the new key.
+  const failed = await reencryptAllAttachments(
+    vault,
+    oldSession,
+    nextSession,
+    onProgress,
   );
-  return new Blob(parts as BlobPart[], {
-    type: attachment.mimeType || "application/octet-stream",
-  });
-}
 
-async function deleteAttachmentRemote(fileId: string) {
-  try {
-    await requestJson("/api/vault/files/delete", {
-      method: "POST",
-      body: JSON.stringify({ id: fileId }),
-    });
-  } catch (deleteError) {
-    console.error("Attachment delete failed", deleteError);
+  // Phase 3: clear the marker — but only once every attachment made it, so a
+  // partial failure keeps the marker and the next unlock retries.
+  onProgress("Upgrading vault security…");
+  if (failed === 0) {
+    const cleanPayload = await encryptVaultPayload(vault, nextSession);
+    await saveVaultRecord(cleanPayload, nextSession.authToken);
   }
+  return nextSession;
 }
 
-async function unlockVaultWithPassword(password: string) {
-  const storedPayload = await loadVaultRecord();
+async function unlockVaultWithPassword(
+  password: string,
+  onProgress: (label: string) => void,
+  confirmLegacyAdoption: () => Promise<boolean>,
+): Promise<{ session: VaultSession; vault: VaultPayload; migrated: boolean }> {
+  const meta = await readVaultMeta();
+  if (!meta.exists) {
+    throw new Error("No vault exists yet. Reload the page to set one up.");
+  }
 
-  if (isVaultEncryptedPayload(storedPayload)) {
-    const session = await restoreVaultSession(password, storedPayload);
+  if (typeof meta.version === "number" && meta.version >= 1 && meta.kdf) {
+    const session = await restoreVaultSession(password, {
+      version: meta.version,
+      kdf: meta.kdf,
+    });
 
+    let storedPayload: unknown;
     try {
-      const decryptedPayload = await decryptVaultPayload(storedPayload, session);
-      return { session, vault: normalizeVault(decryptedPayload), migrated: false };
+      storedPayload = await loadVaultRecord(session.authToken);
+    } catch (loadError) {
+      if (isUnauthorizedError(loadError)) {
+        throw new Error("Incorrect password. Try again.");
+      }
+      throw loadError;
+    }
+
+    if (!isVaultEncryptedPayload(storedPayload)) {
+      throw new Error("Vault data is corrupted.");
+    }
+
+    let decrypted: unknown;
+    try {
+      decrypted = await decryptVaultPayload(storedPayload, session);
     } catch {
       throw new Error("Incorrect password. Try again.");
     }
+
+    const pendingKdf = readPendingMigrationKdf(decrypted);
+    const vault = normalizeVault(decrypted);
+
+    if (session.version >= 2) {
+      if (pendingKdf) {
+        // A previous v1→v2 upgrade was interrupted mid-way; both KDFs are
+        // durably stored, so finish re-encrypting the remaining chunks.
+        onProgress("Finishing security upgrade…");
+        const oldSession = await restoreVaultSession(password, {
+          version: 1,
+          kdf: pendingKdf,
+        });
+        const failed = await reencryptAllAttachments(
+          vault,
+          oldSession,
+          session,
+          onProgress,
+        );
+        if (failed === 0) {
+          const cleanPayload = await encryptVaultPayload(vault, session);
+          await saveVaultRecord(cleanPayload, session.authToken);
+        }
+        return { session, vault, migrated: true };
+      }
+      return { session, vault, migrated: false };
+    }
+
+    // v1 vault: upgrade to the v2 scheme (stronger KDF + server auth token).
+    const nextSession = await migrateVaultToV2(
+      password,
+      vault,
+      session,
+      onProgress,
+    );
+    clearLegacyPasswordMeta();
+    return { session: nextSession, vault, migrated: true };
   }
 
+  // Legacy plaintext vault from before client-side encryption.
+  const storedPayload = await loadVaultRecord("");
   const legacyMeta = readLegacyPasswordMeta();
   if (legacyMeta) {
     const hash = await hashLegacyPassword(password, legacyMeta.salt);
     if (hash !== legacyMeta.hash) {
       throw new Error("Incorrect password. Try again.");
     }
+  } else {
+    // No local record of the legacy password exists on this device, so the
+    // password just typed would silently become the vault's master password.
+    // Make that adoption explicit instead of silent.
+    const confirmed = await confirmLegacyAdoption();
+    if (!confirmed) {
+      throw new Error("Unlock cancelled.");
+    }
   }
 
   const vault = normalizeVault(storedPayload);
   const session = await createVaultSession(password);
   const encryptedPayload = await encryptVaultPayload(vault, session);
-  await saveVaultRecord(encryptedPayload);
+  await saveVaultRecord(encryptedPayload, session.authToken);
   clearLegacyPasswordMeta();
-
   return { session, vault, migrated: true };
 }
 
 export default function App() {
   let copiedSecretResetTimer: number | undefined;
   let copiedFieldResetTimer: number | undefined;
+  let clipboardClearTimer: number | undefined;
+  let saveTimer: number | undefined;
+  let autoLockTimer: number | undefined;
+  let saveVersion = 0;
+  let lastActivityAt = Date.now();
+  let searchInputRef: HTMLInputElement | undefined;
+
   const [view, setView] = createSignal<GateView>("loading");
   const [vault, setVault] = createSignal<VaultPayload>(createVaultDefault());
   const [activeSection, setActiveSection] = createSignal<VaultSection>("apiKeys");
-  const [password, setPassword] = createSignal("");
   const [busy, setBusy] = createSignal(false);
+  const [busyLabel, setBusyLabel] = createSignal("");
   const [error, setError] = createSignal("");
   const [lastSaved, setLastSaved] = createSignal<number | null>(null);
+  const [syncState, setSyncState] = createSignal<SyncState>("idle");
   const [query, setQuery] = createSignal("");
   const [selectedIdentityId, setSelectedIdentityId] = createSignal("");
   const [selectedApiKeyId, setSelectedApiKeyId] = createSignal("");
@@ -526,10 +326,29 @@ export default function App() {
   const [attachmentError, setAttachmentError] = createSignal("");
   const [attachmentBusyId, setAttachmentBusyId] = createSignal("");
   const [attachmentPreview, setAttachmentPreview] =
-    createSignal<AttachmentPreview | null>(null);
-  let fileInputRef: HTMLInputElement | undefined;
+    createSignal<AttachmentPreviewState | null>(null);
+  const [credentialModal, setCredentialModal] =
+    createSignal<CredentialModalState | null>(null);
+  const [credentialDraft, setCredentialDraft] = createSignal<CredentialDraft>(
+    createCredentialDraft(),
+  );
+  const [credentialError, setCredentialError] = createSignal("");
+  const [confirmRequest, setConfirmRequest] = createSignal<ConfirmRequest | null>(
+    null,
+  );
 
   const isEditing = createMemo(() => editingTarget() !== null);
+
+  const requestConfirm = (options: Omit<ConfirmRequest, "resolve">) =>
+    new Promise<boolean>((resolve) => {
+      setConfirmRequest({ ...options, resolve });
+    });
+
+  const resolveConfirm = (confirmed: boolean) => {
+    const current = confirmRequest();
+    setConfirmRequest(null);
+    current?.resolve(confirmed);
+  };
 
   onMount(() => {
     void (async () => {
@@ -537,8 +356,8 @@ export default function App() {
       setError("");
 
       try {
-        const status = await readVaultStatus();
-        setView(status.exists ? "locked" : "setup");
+        const meta = await readVaultMeta();
+        setView(meta.exists ? "locked" : "setup");
       } catch (statusError) {
         console.error(statusError);
         setError(
@@ -570,6 +389,12 @@ export default function App() {
         item.utr,
         item.govGatewayId,
         item.notes,
+        ...item.credentials.flatMap((credential) => [
+          credential.label,
+          credential.username,
+          credential.website,
+        ]),
+        ...item.attachments.map((attachment) => attachment.name),
       ]
         .join(" ")
         .toLowerCase();
@@ -582,12 +407,7 @@ export default function App() {
     const items = vault().apiKeys;
     if (!term) return items;
     return items.filter((item) => {
-      const haystack = [
-        item.label,
-        item.service,
-        item.environment,
-        item.notes,
-      ]
+      const haystack = [item.label, item.service, item.environment, item.notes]
         .join(" ")
         .toLowerCase();
       return haystack.includes(term);
@@ -606,44 +426,76 @@ export default function App() {
     return items.find((item) => item.id === selectedApiKeyId()) ?? items[0];
   });
 
-  const sectionTitle = createMemo(() =>
-    activeSection() === "identities" ? "Identities" : "API Keys",
-  );
+  const scheduleSave = () => {
+    if (saveTimer) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(() => {
+      saveTimer = undefined;
+      void persistVault();
+    }, SAVE_DEBOUNCE_MS);
+  };
 
-  const sectionSubtitle = createMemo(() =>
-    activeSection() === "identities"
-      ? "Create and manage personal identities without a wizard."
-      : "Store service tokens and API secrets inside the encrypted vault.",
-  );
+  const doPersistVault = async (): Promise<boolean> => {
+    const currentSession = session();
+    if (!currentSession || !syncEnabled()) return false;
+    if (saveTimer) {
+      window.clearTimeout(saveTimer);
+      saveTimer = undefined;
+    }
 
-  let saveVersion = 0;
+    const nextVault = vault();
+    const nextVaultJson = JSON.stringify(nextVault);
+    if (nextVaultJson === persistedVaultJson()) {
+      if (syncState() === "dirty" || syncState() === "error") {
+        setSyncState("idle");
+      }
+      return true;
+    }
+
+    const thisVersion = ++saveVersion;
+    setSyncState("saving");
+    try {
+      const encryptedPayload = await encryptVaultPayload(nextVault, currentSession);
+      if (thisVersion !== saveVersion) return true;
+      await saveVaultRecord(encryptedPayload, currentSession.authToken);
+      if (thisVersion !== saveVersion) return true;
+      setPersistedVaultJson(nextVaultJson);
+      setLastSaved(Date.now());
+      if (JSON.stringify(vault()) === nextVaultJson) {
+        setSyncState("idle");
+      }
+      return true;
+    } catch (saveError) {
+      if (thisVersion !== saveVersion) return true;
+      console.error(saveError);
+      setSyncState("error");
+      return false;
+    }
+  };
+
+  // Saves are serialized through a promise chain so overlapping triggers
+  // (debounce, manual retry, lock flush) can never race an in-flight request
+  // and land a stale payload after a newer one.
+  let saveQueue: Promise<boolean> = Promise.resolve(true);
+  const persistVault = (): Promise<boolean> => {
+    const run = saveQueue.then(() => doPersistVault());
+    saveQueue = run.catch(() => false);
+    return run;
+  };
+
   createEffect(() => {
     const currentSession = session();
     if (view() !== "unlocked" || !syncEnabled() || !currentSession) return;
 
-    const nextVault = vault();
-    const nextVaultJson = JSON.stringify(nextVault);
-    if (nextVaultJson === persistedVaultJson()) return;
-
-    const thisVersion = ++saveVersion;
-    void (async () => {
-      try {
-        const encryptedPayload = await encryptVaultPayload(nextVault, currentSession);
-        if (thisVersion !== saveVersion) return;
-        await saveVaultRecord(encryptedPayload);
-        if (thisVersion !== saveVersion) return;
-        setPersistedVaultJson(nextVaultJson);
-        setLastSaved(Date.now());
-      } catch (saveError) {
-        if (thisVersion !== saveVersion) return;
-        console.error(saveError);
-        setError(
-          saveError instanceof Error
-            ? saveError.message
-            : "Unable to save the encrypted vault.",
-        );
-      }
-    })();
+    const nextVaultJson = JSON.stringify(vault());
+    if (nextVaultJson === persistedVaultJson()) {
+      // Content reverted to the persisted state (e.g. an edit was undone
+      // after a failed save) — nothing is unsaved, clear stale indicators.
+      const state = untrack(syncState);
+      if (state === "dirty" || state === "error") setSyncState("idle");
+      return;
+    }
+    setSyncState("dirty");
+    scheduleSave();
   });
 
   createEffect(() => {
@@ -677,29 +529,23 @@ export default function App() {
     setIsApiKeyVisible(false);
   });
 
-  const handleSetup = async (event: Event) => {
-    event.preventDefault();
+  const handleSetup = async (password: string) => {
     setError("");
-
-    if (password().length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
-    }
-
     setBusy(true);
     try {
       const freshVault = createVaultDefault();
-      const nextSession = await createVaultSession(password());
+      const nextSession = await createVaultSession(password);
       const encryptedPayload = await encryptVaultPayload(freshVault, nextSession);
-      await initVault(encryptedPayload);
+      await initVault(encryptedPayload, nextSession.authToken);
       clearLegacyPasswordMeta();
       setVault(freshVault);
       setSession(nextSession);
       setPersistedVaultJson(JSON.stringify(freshVault));
       setSyncEnabled(true);
+      setSyncState("idle");
       setLastSaved(Date.now());
       setView("unlocked");
-      setPassword("");
+      lastActivityAt = Date.now();
     } catch (setupError) {
       console.error(setupError);
       setError(
@@ -712,21 +558,32 @@ export default function App() {
     }
   };
 
-  const handleUnlock = async (event: Event) => {
-    event.preventDefault();
+  const handleUnlock = async (password: string) => {
     setError("");
     setBusy(true);
-
+    setBusyLabel("");
     try {
-      const { session: nextSession, vault: remoteVault, migrated } =
-        await unlockVaultWithPassword(password());
+      const {
+        session: nextSession,
+        vault: remoteVault,
+        migrated,
+      } = await unlockVaultWithPassword(password, setBusyLabel, () =>
+        requestConfirm({
+          title: "Set master password?",
+          message:
+            "This vault predates encryption and this device has no record of its password. The password you just entered will become the vault's master password.",
+          confirmLabel: "Use this password",
+          danger: false,
+        }),
+      );
       setSession(nextSession);
       setVault(remoteVault);
       setPersistedVaultJson(JSON.stringify(remoteVault));
       setSyncEnabled(true);
+      setSyncState("idle");
       setLastSaved(migrated ? Date.now() : null);
       setView("unlocked");
-      setPassword("");
+      lastActivityAt = Date.now();
     } catch (unlockError) {
       console.error(unlockError);
       setError(
@@ -736,28 +593,83 @@ export default function App() {
       );
     } finally {
       setBusy(false);
+      setBusyLabel("");
     }
   };
 
-  const handleLock = () => {
+  const closeAttachmentPreview = () => {
+    const preview = attachmentPreview();
+    if (preview) URL.revokeObjectURL(preview.url);
+    setAttachmentPreview(null);
+  };
+
+  const handleLock = async (options?: { auto?: boolean }) => {
+    if (view() !== "unlocked") return;
+
+    const flushed = await persistVault();
+    if (!flushed && syncState() === "error") {
+      if (options?.auto) return;
+      const proceed = await requestConfirm({
+        title: "Sync failed",
+        message:
+          "Your latest changes could not be saved to the server. Lock anyway and discard them?",
+        confirmLabel: "Lock anyway",
+        danger: true,
+      });
+      if (!proceed) return;
+    }
+
+    saveVersion += 1;
+    if (saveTimer) {
+      window.clearTimeout(saveTimer);
+      saveTimer = undefined;
+    }
     closeAttachmentPreview();
     setUploadProgress(null);
     setAttachmentError("");
     setAttachmentBusyId("");
+    setCredentialModal(null);
+    setConfirmRequest(null);
     setSyncEnabled(false);
     setSession(null);
     setView("locked");
     setVault(createVaultDefault());
     setActiveSection("apiKeys");
-    setPassword("");
     setQuery("");
     setSelectedIdentityId("");
     setSelectedApiKeyId("");
     setIsApiKeyVisible(false);
     setLastSaved(null);
+    setSyncState("idle");
     setPersistedVaultJson(JSON.stringify(createVaultDefault()));
     setIsModalOpen(false);
     setEditingTarget(null);
+    setError("");
+  };
+
+  const handleExport = async () => {
+    const currentSession = session();
+    if (!currentSession) return;
+    try {
+      const encryptedPayload = await encryptVaultPayload(vault(), currentSession);
+      const exportData = {
+        app: "1pass-vault-backup",
+        exportedAt: new Date().toISOString(),
+        note: "Encrypted with your master password. Attachment files are not included.",
+        payload: encryptedPayload,
+      };
+      const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      triggerBlobDownload(
+        url,
+        `1pass-backup-${new Date().toISOString().slice(0, 10)}.json`,
+      );
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (exportError) {
+      console.error(exportError);
+    }
   };
 
   const handleOpenIdentityModal = () => {
@@ -806,25 +718,13 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  onCleanup(() => {
-    if (copiedSecretResetTimer) {
-      window.clearTimeout(copiedSecretResetTimer);
-    }
-    if (copiedFieldResetTimer) {
-      window.clearTimeout(copiedFieldResetTimer);
-    }
-    const preview = attachmentPreview();
-    if (preview) URL.revokeObjectURL(preview.url);
-  });
-
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setModalError("");
     setEditingTarget(null);
   };
 
-  const handleSaveIdentity = (event: Event) => {
-    event.preventDefault();
+  const handleSaveIdentity = () => {
     setModalError("");
 
     const current = draft();
@@ -834,17 +734,19 @@ export default function App() {
     }
 
     const now = Date.now();
-    const nextFirstName = current.firstName.trim();
-    const nextLastName = current.lastName.trim();
-    const nextEmail = current.email.trim();
-    const nextPhone = current.phone.trim();
-    const nextAddress = current.address.trim();
-    const nextNino = current.nino.trim();
-    const nextNhsNumber = current.nhsNumber.trim();
-    const nextPassNumber = current.passNumber.trim();
-    const nextUtr = current.utr.trim();
-    const nextGovGatewayId = current.govGatewayId.trim();
-    const nextNotes = current.notes.trim();
+    const patch = {
+      firstName: current.firstName.trim(),
+      lastName: current.lastName.trim(),
+      email: current.email.trim(),
+      phone: current.phone.trim(),
+      address: current.address.trim(),
+      nino: current.nino.trim(),
+      nhsNumber: current.nhsNumber.trim(),
+      passNumber: current.passNumber.trim(),
+      utr: current.utr.trim(),
+      govGatewayId: current.govGatewayId.trim(),
+      notes: current.notes.trim(),
+    };
     const currentTarget = editingTarget();
     const activeEditingId =
       currentTarget?.section === "identities" ? currentTarget.id : null;
@@ -854,21 +756,7 @@ export default function App() {
         ...currentVault,
         identities: currentVault.identities.map((item) =>
           item.id === activeEditingId
-            ? {
-                ...item,
-                firstName: nextFirstName,
-                lastName: nextLastName,
-                email: nextEmail,
-                phone: nextPhone,
-                address: nextAddress,
-                nino: nextNino,
-                nhsNumber: nextNhsNumber,
-                passNumber: nextPassNumber,
-                utr: nextUtr,
-                govGatewayId: nextGovGatewayId,
-                notes: nextNotes,
-                updatedAt: now,
-              }
+            ? { ...item, ...patch, updatedAt: now }
             : item,
         ),
       }));
@@ -876,18 +764,9 @@ export default function App() {
     } else {
       const identity: VaultIdentityItem = {
         id: createId(),
-        firstName: nextFirstName,
-        lastName: nextLastName,
-        email: nextEmail,
-        phone: nextPhone,
-        address: nextAddress,
-        nino: nextNino,
-        nhsNumber: nextNhsNumber,
-        passNumber: nextPassNumber,
-        utr: nextUtr,
-        govGatewayId: nextGovGatewayId,
-        notes: nextNotes,
+        ...patch,
         attachments: [],
+        credentials: [],
         createdAt: now,
         updatedAt: now,
       };
@@ -903,8 +782,7 @@ export default function App() {
     setEditingTarget(null);
   };
 
-  const handleSaveApiKey = (event: Event) => {
-    event.preventDefault();
+  const handleSaveApiKey = () => {
     setModalError("");
 
     const current = apiKeyDraft();
@@ -914,11 +792,13 @@ export default function App() {
     }
 
     const now = Date.now();
-    const nextLabel = current.label.trim();
-    const nextService = current.service.trim();
-    const nextKey = current.key.trim();
-    const nextEnvironment = current.environment.trim();
-    const nextNotes = current.notes.trim();
+    const patch = {
+      label: current.label.trim(),
+      service: current.service.trim(),
+      key: current.key.trim(),
+      environment: current.environment.trim(),
+      notes: current.notes.trim(),
+    };
     const currentTarget = editingTarget();
     const activeEditingId =
       currentTarget?.section === "apiKeys" ? currentTarget.id : null;
@@ -928,15 +808,7 @@ export default function App() {
         ...currentVault,
         apiKeys: currentVault.apiKeys.map((item) =>
           item.id === activeEditingId
-            ? {
-                ...item,
-                label: nextLabel,
-                service: nextService,
-                key: nextKey,
-                environment: nextEnvironment,
-                notes: nextNotes,
-                updatedAt: now,
-              }
+            ? { ...item, ...patch, updatedAt: now }
             : item,
         ),
       }));
@@ -944,11 +816,7 @@ export default function App() {
     } else {
       const apiKey: VaultApiKeyItem = {
         id: createId(),
-        label: nextLabel,
-        service: nextService,
-        key: nextKey,
-        environment: nextEnvironment,
-        notes: nextNotes,
+        ...patch,
         createdAt: now,
         updatedAt: now,
       };
@@ -962,6 +830,110 @@ export default function App() {
 
     setIsModalOpen(false);
     setEditingTarget(null);
+  };
+
+  const handleOpenCredentialModal = (
+    identityId: string,
+    credential: VaultCredential | null,
+  ) => {
+    setCredentialDraft(
+      credential
+        ? {
+            label: credential.label,
+            username: credential.username,
+            password: credential.password,
+            website: credential.website,
+            notes: credential.notes,
+          }
+        : createCredentialDraft(),
+    );
+    setCredentialError("");
+    setCredentialModal({ identityId, credential });
+  };
+
+  const handleCloseCredentialModal = () => {
+    setCredentialModal(null);
+    setCredentialError("");
+  };
+
+  const handleSaveCredential = () => {
+    const state = credentialModal();
+    if (!state) return;
+    setCredentialError("");
+
+    const current = credentialDraft();
+    if (!current.label.trim() || !current.password) {
+      setCredentialError("Label and password are required.");
+      return;
+    }
+
+    const now = Date.now();
+    const patch = {
+      label: current.label.trim(),
+      username: current.username.trim(),
+      password: current.password,
+      website: current.website.trim(),
+      notes: current.notes.trim(),
+    };
+
+    setVault((currentVault) => ({
+      ...currentVault,
+      identities: currentVault.identities.map((item) => {
+        if (item.id !== state.identityId) return item;
+        if (state.credential) {
+          return {
+            ...item,
+            credentials: item.credentials.map((existing) =>
+              existing.id === state.credential!.id
+                ? { ...existing, ...patch, updatedAt: now }
+                : existing,
+            ),
+            updatedAt: now,
+          };
+        }
+        const credential: VaultCredential = {
+          id: createId(),
+          ...patch,
+          createdAt: now,
+          updatedAt: now,
+        };
+        return {
+          ...item,
+          credentials: [...item.credentials, credential],
+          updatedAt: now,
+        };
+      }),
+    }));
+
+    setCredentialModal(null);
+  };
+
+  const handleDeleteCredential = async (
+    identityId: string,
+    credential: VaultCredential,
+  ) => {
+    const confirmed = await requestConfirm({
+      title: "Delete password",
+      message: `Delete "${credential.label || "this password"}"? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setVault((currentVault) => ({
+      ...currentVault,
+      identities: currentVault.identities.map((item) =>
+        item.id === identityId
+          ? {
+              ...item,
+              credentials: item.credentials.filter(
+                (existing) => existing.id !== credential.id,
+              ),
+              updatedAt: Date.now(),
+            }
+          : item,
+      ),
+    }));
   };
 
   const copyToClipboard = async (text: string): Promise<void> => {
@@ -981,12 +953,31 @@ export default function App() {
     document.body.removeChild(textarea);
   };
 
+  // Best effort: clears the clipboard after a delay, but only when it still
+  // holds the copied secret (skips silently where reading is not permitted).
+  const scheduleClipboardClear = (copied: string) => {
+    if (clipboardClearTimer) window.clearTimeout(clipboardClearTimer);
+    clipboardClearTimer = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const current = await navigator.clipboard.readText();
+          if (current === copied) {
+            await navigator.clipboard.writeText("");
+          }
+        } catch {
+          // Clipboard read not available; leave it untouched.
+        }
+      })();
+    }, CLIPBOARD_CLEAR_MS);
+  };
+
   const handleCopyApiKey = async (item: VaultApiKeyItem) => {
     const key = item.key.trim();
     if (!key) return;
 
     try {
       await copyToClipboard(key);
+      scheduleClipboardClear(key);
       setCopiedApiKeyId(item.id);
       if (copiedSecretResetTimer) {
         window.clearTimeout(copiedSecretResetTimer);
@@ -1000,45 +991,82 @@ export default function App() {
     }
   };
 
+  const markFieldCopied = (fieldKey: string) => {
+    setCopiedField(fieldKey);
+    if (copiedFieldResetTimer) window.clearTimeout(copiedFieldResetTimer);
+    copiedFieldResetTimer = window.setTimeout(() => {
+      setCopiedField((current) => (current === fieldKey ? "" : current));
+    }, 1800);
+  };
+
   const handleCopyField = async (value: string, fieldKey: string) => {
     const trimmed = value.trim();
     if (!trimmed) return;
     try {
       await copyToClipboard(trimmed);
-      setCopiedField(fieldKey);
-      if (copiedFieldResetTimer) window.clearTimeout(copiedFieldResetTimer);
-      copiedFieldResetTimer = window.setTimeout(() => {
-        setCopiedField((c) => (c === fieldKey ? "" : c));
-      }, 1800);
+      markFieldCopied(fieldKey);
     } catch {
       setError("Unable to copy to clipboard.");
     }
   };
 
-  const handleDeleteIdentity = (id: string) => {
-    if (!window.confirm("Delete this identity? This cannot be undone.")) return;
-    const target = vault().identities.find((item) => item.id === id);
+  const handleCopySecret = async (value: string, fieldKey: string) => {
+    if (!value) return;
+    try {
+      await copyToClipboard(value);
+      scheduleClipboardClear(value);
+      markFieldCopied(fieldKey);
+    } catch {
+      setError("Unable to copy to clipboard.");
+    }
+  };
+
+  const handleDeleteIdentity = async (identity: VaultIdentityItem) => {
+    const confirmed = await requestConfirm({
+      title: "Delete identity",
+      message: `Delete "${identity.firstName} ${identity.lastName}" and its ${identity.attachments.length} file(s)? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    const authToken = session()?.authToken ?? "";
     setVault((currentVault) => ({
       ...currentVault,
-      identities: currentVault.identities.filter((item) => item.id !== id),
+      identities: currentVault.identities.filter((item) => item.id !== identity.id),
     }));
-    target?.attachments.forEach((attachment) => {
-      void deleteAttachmentRemote(attachment.id);
+    identity.attachments.forEach((attachment) => {
+      void deleteAttachmentRemote(attachment.id, authToken);
     });
-    if (selectedIdentityId() === id) {
+    if (selectedIdentityId() === identity.id) {
       setSelectedIdentityId("");
     }
   };
 
-  const closeAttachmentPreview = () => {
-    const preview = attachmentPreview();
-    if (preview) URL.revokeObjectURL(preview.url);
-    setAttachmentPreview(null);
+  const handleDeleteApiKey = async (item: VaultApiKeyItem) => {
+    const confirmed = await requestConfirm({
+      title: "Delete API key",
+      message: `Delete "${item.label}"? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    setVault((currentVault) => ({
+      ...currentVault,
+      apiKeys: currentVault.apiKeys.filter((existing) => existing.id !== item.id),
+    }));
+    if (selectedApiKeyId() === item.id) {
+      setSelectedApiKeyId("");
+    }
   };
 
   const handleAddAttachments = async (identityId: string, files: File[]) => {
     const currentSession = session();
     if (!currentSession || files.length === 0) return;
+    // Drag-drop and paste bypass the disabled "+ Add file" button — reject
+    // re-entrant uploads instead of interleaving progress state.
+    if (uploadProgress()) return;
 
     setAttachmentError("");
     for (const [fileIndex, file] of files.entries()) {
@@ -1081,7 +1109,7 @@ export default function App() {
         };
 
         if (!vault().identities.some((item) => item.id === identityId)) {
-          void deleteAttachmentRemote(fileId);
+          void deleteAttachmentRemote(fileId, currentSession.authToken);
           setAttachmentError("The identity no longer exists.");
           break;
         }
@@ -1100,7 +1128,7 @@ export default function App() {
         }));
       } catch (uploadError) {
         console.error(uploadError);
-        void deleteAttachmentRemote(fileId);
+        void deleteAttachmentRemote(fileId, currentSession.authToken);
         setAttachmentError(
           uploadError instanceof Error
             ? `Upload of "${file.name}" failed: ${uploadError.message}`
@@ -1109,21 +1137,6 @@ export default function App() {
       }
     }
     setUploadProgress(null);
-  };
-
-  const handleAttachmentInput = (identityId: string, input: HTMLInputElement) => {
-    const files = input.files ? Array.from(input.files) : [];
-    input.value = "";
-    void handleAddAttachments(identityId, files);
-  };
-
-  const triggerBlobDownload = (url: string, name: string) => {
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = name;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
   };
 
   const handleOpenAttachment = async (attachment: VaultAttachment) => {
@@ -1135,7 +1148,10 @@ export default function App() {
     try {
       const blob = await downloadAttachmentBlob(attachment, currentSession);
       const url = URL.createObjectURL(blob);
-      if (isImageAttachment(attachment) || isPdfAttachment(attachment)) {
+      if (
+        attachment.mimeType.startsWith("image/") ||
+        attachment.mimeType === "application/pdf"
+      ) {
         closeAttachmentPreview();
         setAttachmentPreview({ attachment, url });
       } else {
@@ -1145,9 +1161,7 @@ export default function App() {
     } catch (openError) {
       console.error(openError);
       setAttachmentError(
-        openError instanceof Error
-          ? openError.message
-          : "Unable to open the file.",
+        openError instanceof Error ? openError.message : "Unable to open the file.",
       );
     } finally {
       setAttachmentBusyId("");
@@ -1177,13 +1191,19 @@ export default function App() {
     }
   };
 
-  const handleDeleteAttachment = (
+  const handleDeleteAttachment = async (
     identityId: string,
     attachment: VaultAttachment,
   ) => {
-    if (!window.confirm(`Delete "${attachment.name}"? This cannot be undone.`)) {
-      return;
-    }
+    const confirmed = await requestConfirm({
+      title: "Delete file",
+      message: `Delete "${attachment.name}"? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!confirmed) return;
+
+    const authToken = session()?.authToken ?? "";
     setAttachmentError("");
     setVault((currentVault) => ({
       ...currentVault,
@@ -1199,19 +1219,121 @@ export default function App() {
           : item,
       ),
     }));
-    void deleteAttachmentRemote(attachment.id);
+    void deleteAttachmentRemote(attachment.id, authToken);
   };
 
-  const handleDeleteApiKey = (id: string) => {
-    if (!window.confirm("Delete this API key? This cannot be undone.")) return;
-    setVault((currentVault) => ({
-      ...currentVault,
-      apiKeys: currentVault.apiKeys.filter((item) => item.id !== id),
-    }));
-    if (selectedApiKeyId() === id) {
-      setSelectedApiKeyId("");
+  const handleKeydown = (event: KeyboardEvent) => {
+    // Escape during IME composition cancels the composition, not the overlay.
+    if (event.isComposing) return;
+    if (event.key === "Escape") {
+      if (attachmentPreview()) {
+        closeAttachmentPreview();
+        return;
+      }
+      if (confirmRequest()) {
+        resolveConfirm(false);
+        return;
+      }
+      if (credentialModal()) {
+        handleCloseCredentialModal();
+        return;
+      }
+      if (isModalOpen()) {
+        handleCloseModal();
+      }
+      return;
+    }
+
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+      if (view() !== "unlocked") return;
+      event.preventDefault();
+      searchInputRef?.focus();
+      searchInputRef?.select();
     }
   };
+
+  const handlePaste = (event: ClipboardEvent) => {
+    if (view() !== "unlocked" || activeSection() !== "identities") return;
+    if (
+      isModalOpen() ||
+      credentialModal() ||
+      confirmRequest() ||
+      attachmentPreview()
+    ) {
+      return;
+    }
+    const target = event.target as HTMLElement | null;
+    if (
+      target &&
+      (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+    ) {
+      return;
+    }
+    const identity = selectedIdentity();
+    if (!identity) return;
+    const files = event.clipboardData?.files
+      ? Array.from(event.clipboardData.files)
+      : [];
+    if (files.length > 0) {
+      event.preventDefault();
+      void handleAddAttachments(identity.id, files);
+    }
+  };
+
+  const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+    if (
+      syncState() === "dirty" ||
+      syncState() === "saving" ||
+      syncState() === "error"
+    ) {
+      event.preventDefault();
+      event.returnValue = "";
+    }
+  };
+
+  const markActivity = () => {
+    lastActivityAt = Date.now();
+  };
+
+  onMount(() => {
+    document.addEventListener("keydown", handleKeydown);
+    document.addEventListener("paste", handlePaste);
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    const activityEvents: (keyof WindowEventMap)[] = [
+      "pointerdown",
+      "pointermove",
+      "keydown",
+      "wheel",
+      "touchstart",
+    ];
+    activityEvents.forEach((eventName) =>
+      window.addEventListener(eventName, markActivity, { passive: true }),
+    );
+    autoLockTimer = window.setInterval(() => {
+      if (view() === "unlocked" && Date.now() - lastActivityAt >= AUTO_LOCK_MS) {
+        void handleLock({ auto: true });
+      }
+    }, 30_000);
+
+    onCleanup(() => {
+      document.removeEventListener("keydown", handleKeydown);
+      document.removeEventListener("paste", handlePaste);
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      activityEvents.forEach((eventName) =>
+        window.removeEventListener(eventName, markActivity),
+      );
+      if (autoLockTimer) window.clearInterval(autoLockTimer);
+    });
+  });
+
+  onCleanup(() => {
+    if (copiedSecretResetTimer) window.clearTimeout(copiedSecretResetTimer);
+    if (copiedFieldResetTimer) window.clearTimeout(copiedFieldResetTimer);
+    if (clipboardClearTimer) window.clearTimeout(clipboardClearTimer);
+    if (saveTimer) window.clearTimeout(saveTimer);
+    const preview = attachmentPreview();
+    if (preview) URL.revokeObjectURL(preview.url);
+  });
 
   return (
     <div class="app" data-view={view()}>
@@ -1226,11 +1348,41 @@ export default function App() {
               </div>
             </div>
             <div class="topbar-actions">
-              <span class="status-pill">Unlocked</span>
+              <Show
+                when={syncState() === "error"}
+                fallback={
+                  <span
+                    class={`status-pill sync-pill ${
+                      syncState() === "idle" ? "" : "busy"
+                    }`}
+                    title={
+                      lastSaved()
+                        ? `Last saved ${new Date(lastSaved()!).toLocaleTimeString()}`
+                        : "All changes encrypted & synced"
+                    }
+                  >
+                    <Show when={syncState() === "idle"} fallback={"Saving…"}>
+                      Saved
+                    </Show>
+                  </span>
+                }
+              >
+                <button
+                  class="status-pill sync-pill error"
+                  type="button"
+                  title="Saving failed. Click to retry."
+                  onClick={() => void persistVault()}
+                >
+                  Sync failed — Retry
+                </button>
+              </Show>
+              <button class="btn ghost" type="button" onClick={() => void handleExport()}>
+                Export
+              </button>
               <a class="btn ghost" href="/tax">
                 Tax tools
               </a>
-              <button class="btn ghost" type="button" onClick={handleLock}>
+              <button class="btn ghost" type="button" onClick={() => void handleLock()}>
                 Lock
               </button>
             </div>
@@ -1238,64 +1390,14 @@ export default function App() {
         </Show>
 
         <Show when={view() !== "unlocked"}>
-          <section class="gate minimal">
-            <div class="gate-card minimal">
-              <div class="brand-stack">
-                <span class="brand-logo" aria-hidden="true" />
-                <span class="brand-mark">1Pass</span>
-                <span class="brand-subtitle">Personal Vault</span>
-              </div>
-              <p class="subtitle">
-                {view() === "loading"
-                  ? "Checking vault status..."
-                  : view() === "setup"
-                    ? "Create a master password. Vault data is encrypted in the browser before sync."
-                    : "Enter your master password to decrypt the vault."}
-              </p>
-              <Show
-                when={view() !== "loading"}
-                fallback={<button class="btn primary" type="button" disabled>Loading...</button>}
-              >
-                <form
-                  class="gate-form minimal"
-                  onSubmit={(event) => {
-                    if (view() === "setup") {
-                      void handleSetup(event);
-                    } else {
-                      void handleUnlock(event);
-                    }
-                  }}
-                >
-                  <label class="field">
-                    <span class="field-label sr-only">Master password</span>
-                    <input
-                      type="password"
-                      autocomplete={
-                        view() === "setup" ? "new-password" : "current-password"
-                      }
-                      placeholder={
-                        view() === "setup"
-                          ? "Create master password"
-                          : "Enter master password"
-                      }
-                      value={password()}
-                      onInput={(event) => setPassword(event.currentTarget.value)}
-                    />
-                  </label>
-                  <Show when={Boolean(error())}>
-                    <div class="form-error">{error()}</div>
-                  </Show>
-                  <button class="btn primary" type="submit" disabled={busy()}>
-                    {busy()
-                      ? "Working..."
-                      : view() === "setup"
-                        ? "Create vault"
-                        : "Unlock vault"}
-                  </button>
-                </form>
-              </Show>
-            </div>
-          </section>
+          <Gate
+            mode={view() as "loading" | "setup" | "locked"}
+            busy={busy()}
+            busyLabel={busyLabel()}
+            error={error()}
+            onSetup={(password) => void handleSetup(password)}
+            onUnlock={(password) => void handleUnlock(password)}
+          />
         </Show>
 
         <Show when={view() === "unlocked"}>
@@ -1316,9 +1418,7 @@ export default function App() {
                   <span>{vault().identities.length}</span>
                 </button>
                 <button
-                  class={`nav-item ${
-                    activeSection() === "apiKeys" ? "active" : ""
-                  }`}
+                  class={`nav-item ${activeSection() === "apiKeys" ? "active" : ""}`}
                   type="button"
                   onClick={() => {
                     setActiveSection("apiKeys");
@@ -1338,11 +1438,12 @@ export default function App() {
                   <label class="search-field">
                     <span class="sr-only">Search vault items</span>
                     <input
+                      ref={searchInputRef}
                       type="search"
                       placeholder={
                         activeSection() === "identities"
-                          ? "Search identities"
-                          : "Search API keys"
+                          ? "Search identities (⌘K)"
+                          : "Search API keys (⌘K)"
                       }
                       value={query()}
                       onInput={(event) => setQuery(event.currentTarget.value)}
@@ -1381,7 +1482,24 @@ export default function App() {
                       fallback={
                         <Show
                           when={filteredApiKeys().length > 0}
-                          fallback={<p class="empty">No API keys yet.</p>}
+                          fallback={
+                            <div class="empty-state">
+                              <p class="empty">
+                                {query().trim()
+                                  ? "No API keys match your search."
+                                  : "No API keys yet."}
+                              </p>
+                              <Show when={!query().trim()}>
+                                <button
+                                  class="btn ghost"
+                                  type="button"
+                                  onClick={handleOpenApiKeyModal}
+                                >
+                                  Add your first API key
+                                </button>
+                              </Show>
+                            </div>
+                          }
                         >
                           <For each={filteredApiKeys()}>
                             {(item) => (
@@ -1407,7 +1525,24 @@ export default function App() {
                     >
                       <Show
                         when={filteredIdentities().length > 0}
-                        fallback={<p class="empty">No identities yet.</p>}
+                        fallback={
+                          <div class="empty-state">
+                            <p class="empty">
+                              {query().trim()
+                                ? "No identities match your search."
+                                : "No identities yet."}
+                            </p>
+                            <Show when={!query().trim()}>
+                              <button
+                                class="btn ghost"
+                                type="button"
+                                onClick={handleOpenIdentityModal}
+                              >
+                                Create your first identity
+                              </button>
+                            </Show>
+                          </div>
+                        }
                       >
                         <For each={filteredIdentities()}>
                           {(item) => (
@@ -1418,17 +1553,37 @@ export default function App() {
                               type="button"
                               onClick={() => setSelectedIdentityId(item.id)}
                             >
+                              <span class="avatar" aria-hidden="true">
+                                {identityInitials(item)}
+                              </span>
                               <div>
                                 <strong>
                                   {item.firstName} {item.lastName}
                                 </strong>
                                 <span class="muted">
-                                  {item.email ||
-                                    item.phone ||
-                                    "No contact details"}
+                                  {item.email || item.phone || "No contact details"}
                                 </span>
                               </div>
-                              <span class="pill">Identity</span>
+                              <span class="list-item-end">
+                                <Show when={item.credentials.length > 0}>
+                                  <span
+                                    class="count-badge"
+                                    title={`${item.credentials.length} password(s)`}
+                                  >
+                                    <KeyIcon />
+                                    {item.credentials.length}
+                                  </span>
+                                </Show>
+                                <Show when={item.attachments.length > 0}>
+                                  <span
+                                    class="count-badge"
+                                    title={`${item.attachments.length} file(s)`}
+                                  >
+                                    <PaperclipIcon />
+                                    {item.attachments.length}
+                                  </span>
+                                </Show>
+                              </span>
                             </button>
                           )}
                         </For>
@@ -1450,110 +1605,17 @@ export default function App() {
                         }
                       >
                         {(item) => (
-                          <div>
-                            <div class="detail-header">
-                              <div>
-                                <h2>{item().label}</h2>
-                                <p class="muted">API key record</p>
-                              </div>
-                              <div class="detail-actions">
-                                <span class="pill">Secret</span>
-                                <button
-                                  class="icon-button icon-only"
-                                  type="button"
-                                  aria-label="Edit API key"
-                                  onClick={() => handleOpenEditApiKeyModal(item())}
-                                >
-                                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <path
-                                      d="M16.862 4.487a1.5 1.5 0 0 1 2.121 2.122l-9.9 9.9-3.36.39.39-3.36 9.9-9.9Zm-12.6 14.4h15.3"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                      stroke-width="1.6"
-                                    />
-                                  </svg>
-                                </button>
-                                <button
-                                  class="icon-button icon-only"
-                                  type="button"
-                                  aria-label="Delete API key"
-                                  onClick={() => handleDeleteApiKey(item().id)}
-                                >
-                                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                                    <path
-                                      d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      stroke-linecap="round"
-                                      stroke-linejoin="round"
-                                      stroke-width="1.6"
-                                    />
-                                  </svg>
-                                </button>
-                              </div>
-                            </div>
-                            <div class="detail-grid">
-                              <div>
-                                <span class="meta-label">Environment</span>
-                                <p>{item().environment.trim() || "Not provided"}</p>
-                              </div>
-                              <div class="detail-span">
-                                <div class="secret-header">
-                                  <span class="meta-label">API Key</span>
-                                  <div class="secret-actions">
-                                    <button
-                                      class={`secret-toggle icon-copy ${
-                                        copiedApiKeyId() === item().id ? "is-success" : ""
-                                      }`}
-                                      type="button"
-                                      onClick={() => void handleCopyApiKey(item())}
-                                      disabled={!item().key.trim()}
-                                      title={copiedApiKeyId() === item().id ? "Copied!" : "Copy API key"}
-                                    >
-                                      <svg class="copy-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-                                        <rect x="9" y="9" width="13" height="13" rx="2" />
-                                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                                      </svg>
-                                      <svg class="check-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                                        <path d="M20 6 9 17l-5-5" />
-                                      </svg>
-                                    </button>
-                                    <button
-                                      class="secret-toggle"
-                                      type="button"
-                                      onClick={() =>
-                                        setIsApiKeyVisible((current) => !current)
-                                      }
-                                      disabled={!item().key.trim()}
-                                    >
-                                      {isApiKeyVisible() ? "Hide" : "Show"}
-                                    </button>
-                                  </div>
-                                </div>
-                                <p
-                                  class={`secret-value ${
-                                    isApiKeyVisible() ? "" : "masked"
-                                  }`}
-                                >
-                                  {isApiKeyVisible()
-                                    ? item().key.trim() || "Not provided"
-                                    : maskSecretValue(item().key)}
-                                </p>
-                              </div>
-                              <div class="detail-span">
-                                <span class="meta-label">Notes</span>
-                                <p class="notes-content">
-                                  {item().notes.trim() || "Not provided"}
-                                </p>
-                              </div>
-                            </div>
-                            <div class="detail-footer">
-                              <span class="meta-label">Created</span>
-                              <strong>{formatTimestamp(item().createdAt)}</strong>
-                            </div>
-                          </div>
+                          <ApiKeyDetail
+                            item={item()}
+                            isKeyVisible={isApiKeyVisible()}
+                            isCopied={copiedApiKeyId() === item().id}
+                            onToggleVisible={() =>
+                              setIsApiKeyVisible((current) => !current)
+                            }
+                            onCopyKey={() => void handleCopyApiKey(item())}
+                            onEdit={() => handleOpenEditApiKeyModal(item())}
+                            onDelete={() => void handleDeleteApiKey(item())}
+                          />
                         )}
                       </Show>
                     }
@@ -1567,267 +1629,42 @@ export default function App() {
                       }
                     >
                       {(identity) => (
-                        <div>
-                          <div class="detail-header">
-                            <div>
-                              <h2>
-                                {identity().firstName} {identity().lastName}
-                              </h2>
-                              <p class="muted">Identity record</p>
-                            </div>
-                            <div class="detail-actions">
-                              <span class="pill">Private</span>
-                              <button
-                                class="icon-button icon-only"
-                                type="button"
-                                aria-label="Edit identity"
-                                onClick={() => handleOpenEditIdentityModal(identity())}
-                              >
-                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                  <path
-                                    d="M16.862 4.487a1.5 1.5 0 0 1 2.121 2.122l-9.9 9.9-3.36.39.39-3.36 9.9-9.9Zm-12.6 14.4h15.3"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="1.6"
-                                  />
-                                </svg>
-                              </button>
-                              <button
-                                class="icon-button icon-only"
-                                type="button"
-                                aria-label="Delete identity"
-                                onClick={() => handleDeleteIdentity(identity().id)}
-                              >
-                                <svg viewBox="0 0 24 24" aria-hidden="true">
-                                  <path
-                                    d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="1.6"
-                                  />
-                                </svg>
-                              </button>
-                            </div>
-                          </div>
-                          <div class="detail-grid">
-                            <For each={IDENTITY_DETAIL_FIELDS}>
-                              {(fieldDef) => {
-                                const value = () => identity()[fieldDef.field] as string;
-                                return (
-                                  <div
-                                    class={`copyable-field ${value().trim() ? "" : "empty"}`}
-                                    onClick={() => void handleCopyField(value(), fieldDef.field)}
-                                    title={value().trim() ? "Click to copy" : undefined}
-                                  >
-                                    <span class="meta-label">{fieldDef.label}</span>
-                                    <p>{value().trim() || "Not provided"}</p>
-                                    <Show when={value().trim()}>
-                                      <span class={`copied-badge ${copiedField() === fieldDef.field ? "visible" : ""}`}>
-                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5" /></svg>
-                                        Copied
-                                      </span>
-                                    </Show>
-                                  </div>
-                                );
-                              }}
-                            </For>
-                            <div>
-                              <span class="meta-label">Notes</span>
-                              <p class="notes-content">
-                                {identity().notes.trim() || "Not provided"}
-                              </p>
-                            </div>
-                          </div>
-                          <div class="attachments-block">
-                            <div class="attachments-header">
-                              <span class="meta-label">
-                                Attachments
-                                <Show when={identity().attachments.length > 0}>
-                                  {" "}
-                                  ({identity().attachments.length})
-                                </Show>
-                              </span>
-                              <button
-                                class="secret-toggle"
-                                type="button"
-                                disabled={Boolean(uploadProgress())}
-                                onClick={() => fileInputRef?.click()}
-                              >
-                                + Add file
-                              </button>
-                              <input
-                                ref={fileInputRef}
-                                type="file"
-                                multiple
-                                accept="image/*,application/pdf"
-                                class="sr-only"
-                                tabindex={-1}
-                                onChange={(event) =>
-                                  handleAttachmentInput(
-                                    identity().id,
-                                    event.currentTarget,
-                                  )
-                                }
-                              />
-                            </div>
-                            <Show when={uploadProgress()}>
-                              {(progress) => (
-                                <div class="upload-progress">
-                                  <span class="upload-spinner" aria-hidden="true" />
-                                  Encrypting & uploading “{progress().name}”
-                                  <Show when={progress().fileCount > 1}>
-                                    {" "}
-                                    ({progress().fileIndex}/{progress().fileCount})
-                                  </Show>{" "}
-                                  — {progress().percent}%
-                                </div>
-                              )}
-                            </Show>
-                            <Show
-                              when={identity().attachments.length > 0}
-                              fallback={
-                                <p class="attachments-empty">
-                                  No files yet. Add passport scans, photos or PDFs —
-                                  they are encrypted before upload.
-                                </p>
-                              }
-                            >
-                              <div class="attachment-grid">
-                                <For each={identity().attachments}>
-                                  {(attachment) => (
-                                    <div class="attachment-tile">
-                                      <button
-                                        class="attachment-preview"
-                                        type="button"
-                                        title={`Open ${attachment.name}`}
-                                        onClick={() =>
-                                          void handleOpenAttachment(attachment)
-                                        }
-                                      >
-                                        <Show
-                                          when={attachment.thumb}
-                                          fallback={
-                                            <span class="attachment-glyph">
-                                              <Show
-                                                when={isPdfAttachment(attachment)}
-                                                fallback={
-                                                  <Show
-                                                    when={isImageAttachment(attachment)}
-                                                    fallback={
-                                                      <svg viewBox="0 0 24 24" aria-hidden="true">
-                                                        <path
-                                                          d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Zm0 0v5h5"
-                                                          fill="none"
-                                                          stroke="currentColor"
-                                                          stroke-linecap="round"
-                                                          stroke-linejoin="round"
-                                                          stroke-width="1.6"
-                                                        />
-                                                      </svg>
-                                                    }
-                                                  >
-                                                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                                                      <path
-                                                        d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Zm4.5 4a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3ZM20 15l-4.5-4.5L8 18h12l0-3Z"
-                                                        fill="none"
-                                                        stroke="currentColor"
-                                                        stroke-linecap="round"
-                                                        stroke-linejoin="round"
-                                                        stroke-width="1.6"
-                                                      />
-                                                    </svg>
-                                                  </Show>
-                                                }
-                                              >
-                                                <span class="attachment-badge">PDF</span>
-                                              </Show>
-                                            </span>
-                                          }
-                                        >
-                                          <img
-                                            src={attachment.thumb}
-                                            alt={attachment.name}
-                                            loading="lazy"
-                                          />
-                                        </Show>
-                                        <Show when={attachmentBusyId() === attachment.id}>
-                                          <span class="attachment-loading">
-                                            <span class="upload-spinner" aria-hidden="true" />
-                                          </span>
-                                        </Show>
-                                      </button>
-                                      <div class="attachment-meta">
-                                        <span class="attachment-name" title={attachment.name}>
-                                          {attachment.name}
-                                        </span>
-                                        <span class="attachment-size">
-                                          {formatBytes(attachment.size)}
-                                        </span>
-                                      </div>
-                                      <div class="attachment-actions">
-                                        <button
-                                          class="icon-button icon-only"
-                                          type="button"
-                                          aria-label={`Download ${attachment.name}`}
-                                          title="Download"
-                                          disabled={Boolean(attachmentBusyId())}
-                                          onClick={() =>
-                                            void handleDownloadAttachment(attachment)
-                                          }
-                                        >
-                                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                                            <path
-                                              d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14"
-                                              fill="none"
-                                              stroke="currentColor"
-                                              stroke-linecap="round"
-                                              stroke-linejoin="round"
-                                              stroke-width="1.6"
-                                            />
-                                          </svg>
-                                        </button>
-                                        <button
-                                          class="icon-button icon-only"
-                                          type="button"
-                                          aria-label={`Delete ${attachment.name}`}
-                                          title="Delete"
-                                          onClick={() =>
-                                            handleDeleteAttachment(
-                                              identity().id,
-                                              attachment,
-                                            )
-                                          }
-                                        >
-                                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                                            <path
-                                              d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6h14"
-                                              fill="none"
-                                              stroke="currentColor"
-                                              stroke-linecap="round"
-                                              stroke-linejoin="round"
-                                              stroke-width="1.6"
-                                            />
-                                          </svg>
-                                        </button>
-                                      </div>
-                                    </div>
-                                  )}
-                                </For>
-                              </div>
-                            </Show>
-                            <Show when={Boolean(attachmentError())}>
-                              <div class="form-error">{attachmentError()}</div>
-                            </Show>
-                          </div>
-                          <div class="detail-footer">
-                            <span class="meta-label">Created</span>
-                            <strong>{formatTimestamp(identity().createdAt)}</strong>
-                          </div>
-                        </div>
+                        <IdentityDetail
+                          identity={identity()}
+                          copiedField={copiedField()}
+                          attachmentBusyId={attachmentBusyId()}
+                          uploadProgress={uploadProgress()}
+                          attachmentError={attachmentError()}
+                          onCopyField={(value, key) =>
+                            void handleCopyField(value, key)
+                          }
+                          onCopySecret={(value, key) =>
+                            void handleCopySecret(value, key)
+                          }
+                          onEdit={() => handleOpenEditIdentityModal(identity())}
+                          onDelete={() => void handleDeleteIdentity(identity())}
+                          onAddFiles={(files) =>
+                            void handleAddAttachments(identity().id, files)
+                          }
+                          onOpenAttachment={(attachment) =>
+                            void handleOpenAttachment(attachment)
+                          }
+                          onDownloadAttachment={(attachment) =>
+                            void handleDownloadAttachment(attachment)
+                          }
+                          onDeleteAttachment={(attachment) =>
+                            void handleDeleteAttachment(identity().id, attachment)
+                          }
+                          onAddCredential={() =>
+                            handleOpenCredentialModal(identity().id, null)
+                          }
+                          onEditCredential={(credential) =>
+                            handleOpenCredentialModal(identity().id, credential)
+                          }
+                          onDeleteCredential={(credential) =>
+                            void handleDeleteCredential(identity().id, credential)
+                          }
+                        />
                       )}
                     </Show>
                   </Show>
@@ -1839,364 +1676,64 @@ export default function App() {
       </div>
 
       <Show when={isModalOpen()}>
-        <div class="modal-backdrop" onClick={handleCloseModal}>
-          <div class="modal" onClick={(event) => event.stopPropagation()}>
-            <Show
-              when={
-                activeSection() === "identities" ||
-                editingTarget()?.section === "identities"
+        <Show
+          when={
+            activeSection() === "identities" ||
+            editingTarget()?.section === "identities"
+          }
+          fallback={
+            <ApiKeyModal
+              draft={apiKeyDraft()}
+              isEditing={isEditing()}
+              error={modalError()}
+              onChange={(patch) =>
+                setApiKeyDraft((current) => ({ ...current, ...patch }))
               }
-              fallback={
-                <>
-                  <div class="modal-header">
-                    <div>
-                      <p class="eyebrow">
-                        {isEditing() ? "Edit API key" : "New API key"}
-                      </p>
-                      <h2>{isEditing() ? "Edit API key" : "Create API key"}</h2>
-                      <p class="muted">
-                        Label and API key are required. Environment and notes
-                        are optional.
-                      </p>
-                    </div>
-                    <button
-                      class="icon-button"
-                      type="button"
-                      onClick={handleCloseModal}
-                    >
-                      Close
-                    </button>
-                  </div>
-                  <form class="modal-form" onSubmit={handleSaveApiKey}>
-                    <div class="modal-grid">
-                      <label class="field">
-                        <span class="field-label">Label</span>
-                        <input
-                          type="text"
-                          value={apiKeyDraft().label}
-                          onInput={(event) =>
-                            setApiKeyDraft((current) => ({
-                              ...current,
-                              label: event.currentTarget.value,
-                            }))
-                          }
-                          required
-                        />
-                      </label>
-                      <label class="field">
-                        <span class="field-label">Service</span>
-                        <input
-                          type="text"
-                          value={apiKeyDraft().service}
-                          onInput={(event) =>
-                            setApiKeyDraft((current) => ({
-                              ...current,
-                              service: event.currentTarget.value,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label class="field full">
-                        <span class="field-label">API Key</span>
-                        <textarea
-                          rows={4}
-                          value={apiKeyDraft().key}
-                          onInput={(event) =>
-                            setApiKeyDraft((current) => ({
-                              ...current,
-                              key: event.currentTarget.value,
-                            }))
-                          }
-                          required
-                        />
-                      </label>
-                      <label class="field">
-                        <span class="field-label">Environment</span>
-                        <input
-                          type="text"
-                          value={apiKeyDraft().environment}
-                          onInput={(event) =>
-                            setApiKeyDraft((current) => ({
-                              ...current,
-                              environment: event.currentTarget.value,
-                            }))
-                          }
-                        />
-                      </label>
-                      <label class="field full">
-                        <span class="field-label">Notes</span>
-                        <textarea
-                          rows={3}
-                          value={apiKeyDraft().notes}
-                          onInput={(event) =>
-                            setApiKeyDraft((current) => ({
-                              ...current,
-                              notes: event.currentTarget.value,
-                            }))
-                          }
-                        />
-                      </label>
-                    </div>
-                    <Show when={Boolean(modalError())}>
-                      <div class="form-error">{modalError()}</div>
-                    </Show>
-                    <div class="modal-actions">
-                      <button
-                        class="btn ghost"
-                        type="button"
-                        onClick={handleCloseModal}
-                      >
-                        Cancel
-                      </button>
-                      <button class="btn primary" type="submit">
-                        {isEditing() ? "Save changes" : "Save API key"}
-                      </button>
-                    </div>
-                  </form>
-                </>
-              }
-            >
-              <div class="modal-header">
-                <div>
-                  <p class="eyebrow">
-                    {isEditing() ? "Edit identity" : "New identity"}
-                  </p>
-                  <h2>{isEditing() ? "Edit identity" : "Create identity"}</h2>
-                  <p class="muted">
-                    First name and last name are required. Everything else is
-                    optional.
-                  </p>
-                </div>
-                <button
-                  class="icon-button"
-                  type="button"
-                  onClick={handleCloseModal}
-                >
-                  Close
-                </button>
-              </div>
-              <form class="modal-form" onSubmit={handleSaveIdentity}>
-                <div class="modal-grid">
-                  <label class="field">
-                    <span class="field-label">First name</span>
-                    <input
-                      type="text"
-                      value={draft().firstName}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          firstName: event.currentTarget.value,
-                        }))
-                      }
-                      required
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field-label">Last name</span>
-                    <input
-                      type="text"
-                      value={draft().lastName}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          lastName: event.currentTarget.value,
-                        }))
-                      }
-                      required
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field-label">Email</span>
-                    <input
-                      type="email"
-                      value={draft().email}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          email: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field-label">Phone</span>
-                    <input
-                      type="tel"
-                      value={draft().phone}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          phone: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label class="field full">
-                    <span class="field-label">Address</span>
-                    <input
-                      type="text"
-                      value={draft().address}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          address: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field-label">NINO</span>
-                    <input
-                      type="text"
-                      value={draft().nino}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          nino: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field-label">NHS Number</span>
-                    <input
-                      type="text"
-                      value={draft().nhsNumber}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          nhsNumber: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field-label">Pass No</span>
-                    <input
-                      type="text"
-                      value={draft().passNumber}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          passNumber: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field-label">UTR</span>
-                    <input
-                      type="text"
-                      value={draft().utr}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          utr: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label class="field">
-                    <span class="field-label">Gov Gateway ID</span>
-                    <input
-                      type="text"
-                      value={draft().govGatewayId}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          govGatewayId: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                  <label class="field full">
-                    <span class="field-label">Notes</span>
-                    <textarea
-                      rows={3}
-                      value={draft().notes}
-                      onInput={(event) =>
-                        setDraft((current) => ({
-                          ...current,
-                          notes: event.currentTarget.value,
-                        }))
-                      }
-                    />
-                  </label>
-                </div>
-                <Show when={Boolean(modalError())}>
-                  <div class="form-error">{modalError()}</div>
-                </Show>
-                <div class="modal-actions">
-                  <button
-                    class="btn ghost"
-                    type="button"
-                    onClick={handleCloseModal}
-                  >
-                    Cancel
-                  </button>
-                  <button class="btn primary" type="submit">
-                    {isEditing() ? "Save changes" : "Save identity"}
-                  </button>
-                </div>
-              </form>
-            </Show>
-          </div>
-        </div>
+              onSubmit={handleSaveApiKey}
+              onClose={handleCloseModal}
+            />
+          }
+        >
+          <IdentityModal
+            draft={draft()}
+            isEditing={isEditing()}
+            error={modalError()}
+            onChange={(patch) =>
+              setDraft((current) => ({ ...current, ...patch }))
+            }
+            onSubmit={handleSaveIdentity}
+            onClose={handleCloseModal}
+          />
+        </Show>
+      </Show>
+
+      <Show when={credentialModal()}>
+        {(state) => (
+          <CredentialModal
+            draft={credentialDraft()}
+            isEditing={Boolean(state().credential)}
+            error={credentialError()}
+            onChange={(patch) =>
+              setCredentialDraft((current) => ({ ...current, ...patch }))
+            }
+            onSubmit={handleSaveCredential}
+            onClose={handleCloseCredentialModal}
+          />
+        )}
       </Show>
 
       <Show when={attachmentPreview()}>
         {(preview) => (
-          <div class="modal-backdrop preview-backdrop" onClick={closeAttachmentPreview}>
-            <div
-              class="preview-shell"
-              onClick={(event) => event.stopPropagation()}
-            >
-              <div class="preview-header">
-                <div class="preview-title">
-                  <strong>{preview().attachment.name}</strong>
-                  <span class="attachment-size">
-                    {formatBytes(preview().attachment.size)}
-                  </span>
-                </div>
-                <div class="preview-actions">
-                  <button
-                    class="secret-toggle"
-                    type="button"
-                    onClick={() =>
-                      triggerBlobDownload(preview().url, preview().attachment.name)
-                    }
-                  >
-                    Download
-                  </button>
-                  <button
-                    class="icon-button"
-                    type="button"
-                    onClick={closeAttachmentPreview}
-                  >
-                    Close
-                  </button>
-                </div>
-              </div>
-              <div class="preview-body">
-                <Show
-                  when={isImageAttachment(preview().attachment)}
-                  fallback={
-                    <iframe
-                      class="preview-frame"
-                      src={preview().url}
-                      title={preview().attachment.name}
-                    />
-                  }
-                >
-                  <img
-                    class="preview-image"
-                    src={preview().url}
-                    alt={preview().attachment.name}
-                  />
-                </Show>
-              </div>
-            </div>
-          </div>
+          <AttachmentPreviewOverlay
+            preview={preview()}
+            onClose={closeAttachmentPreview}
+          />
+        )}
+      </Show>
+
+      <Show when={confirmRequest()}>
+        {(request) => (
+          <ConfirmDialog request={request()} onClose={resolveConfirm} />
         )}
       </Show>
     </div>

@@ -1,5 +1,7 @@
 import {
+  checkVaultAuth,
   ensureVaultFilesTable,
+  ensureVaultTable,
   errorResponse,
   getDb,
   isValidFileId,
@@ -33,6 +35,11 @@ export async function onRequestGet({
     }
 
     const db = getDb(env);
+    await ensureVaultTable(db);
+
+    const authFailure = await checkVaultAuth(request, db, env);
+    if (authFailure) return authFailure;
+
     await ensureVaultFilesTable(db);
     const row = await db
       .prepare(
