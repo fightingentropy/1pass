@@ -78,10 +78,13 @@ export const AUTO_LOCK_MS = 15 * 60 * 1000;
 export const CLIPBOARD_CLEAR_MS = 60 * 1000;
 export const SAVE_DEBOUNCE_MS = 600;
 
-export const IDENTITY_DETAIL_FIELDS = [
+export const IDENTITY_CONTACT_FIELDS = [
   { label: "Email", field: "email" },
   { label: "Phone", field: "phone" },
   { label: "Address", field: "address" },
+] as const;
+
+export const IDENTITY_GOVERNMENT_FIELDS = [
   { label: "NINO", field: "nino" },
   { label: "NHS Number", field: "nhsNumber" },
   { label: "Pass No", field: "passNumber" },

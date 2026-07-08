@@ -76,11 +76,9 @@ export default function TaxCalculator() {
   return (
     <div class="tax-page">
       <header class="tax-header">
-        <a class="tax-back" href="/">← Vault</a>
-        <h1>
-          Employment Tax Calculator - <span>🇬🇧</span>
-        </h1>
-        <p class="subtitle">2026/27 Tax Year</p>
+        <a class="tax-back" href="/">← Back to vault</a>
+        <h1>Employment tax calculator</h1>
+        <p class="subtitle">2026/27 tax year</p>
       </header>
 
       <div class="tax-layout">

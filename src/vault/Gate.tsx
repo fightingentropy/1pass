@@ -44,28 +44,29 @@ export default function Gate(props: GateProps) {
   };
 
   const visibleError = () => localError() || props.error;
+  const subtitle = () => {
+    if (props.mode === "loading") return "Checking vault…";
+    if (props.mode === "setup") {
+      return "Choose a master password. Everything is encrypted in the browser — there is no recovery.";
+    }
+    return "Enter your master password.";
+  };
 
   return (
     <section class="gate minimal">
-      <div class="gate-card minimal">
+      <div class="gate-card minimal" data-mode={props.mode}>
         <div class="brand-stack">
           <span class="brand-logo" aria-hidden="true" />
           <span class="brand-mark">1Pass</span>
-          <span class="brand-subtitle">Personal Vault</span>
+          <span class="brand-subtitle">Personal vault</span>
         </div>
-        <p class="subtitle">
-          {props.mode === "loading"
-            ? "Checking vault status..."
-            : props.mode === "setup"
-              ? "Create a master password. Vault data is encrypted in the browser before sync. There is no recovery if you forget it."
-              : "Enter your master password to decrypt the vault."}
-        </p>
+        <p class="subtitle">{subtitle()}</p>
         <Show
           when={props.mode !== "loading"}
           fallback={
-            <button class="btn primary" type="button" disabled>
-              Loading...
-            </button>
+            <p class="gate-status" aria-live="polite">
+              Checking vault…
+            </p>
           }
         >
           <form class="gate-form minimal" onSubmit={handleSubmit}>
@@ -82,7 +83,7 @@ export default function Gate(props: GateProps) {
                   placeholder={
                     props.mode === "setup"
                       ? "Create master password"
-                      : "Enter master password"
+                      : "Master password"
                   }
                   value={password()}
                   onInput={(event) => setPassword(event.currentTarget.value)}
@@ -104,7 +105,7 @@ export default function Gate(props: GateProps) {
                 <input
                   type={showPassword() ? "text" : "password"}
                   autocomplete="new-password"
-                  placeholder="Confirm master password"
+                  placeholder="Confirm password"
                   value={confirmPassword()}
                   onInput={(event) =>
                     setConfirmPassword(event.currentTarget.value)
@@ -117,10 +118,10 @@ export default function Gate(props: GateProps) {
             </Show>
             <button class="btn primary" type="submit" disabled={props.busy}>
               {props.busy
-                ? props.busyLabel || "Working..."
+                ? props.busyLabel || "Working…"
                 : props.mode === "setup"
                   ? "Create vault"
-                  : "Unlock vault"}
+                  : "Unlock"}
             </button>
           </form>
         </Show>

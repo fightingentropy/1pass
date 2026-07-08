@@ -1344,7 +1344,7 @@ export default function App() {
               <span class="brand-logo" aria-hidden="true" />
               <div class="brand-text">
                 <span class="brand-mark">1Pass</span>
-                <span class="brand-subtitle">Personal Vault</span>
+                <span class="brand-subtitle">Personal vault</span>
               </div>
             </div>
             <div class="topbar-actions">
@@ -1376,13 +1376,21 @@ export default function App() {
                   Sync failed — Retry
                 </button>
               </Show>
-              <button class="btn ghost" type="button" onClick={() => void handleExport()}>
+              <button
+                class="btn quiet"
+                type="button"
+                onClick={() => void handleExport()}
+              >
                 Export
               </button>
-              <a class="btn ghost" href="/tax">
-                Tax tools
+              <a class="btn quiet" href="/tax">
+                Tax
               </a>
-              <button class="btn ghost" type="button" onClick={() => void handleLock()}>
+              <button
+                class="btn ghost lock"
+                type="button"
+                onClick={() => void handleLock()}
+              >
                 Lock
               </button>
             </div>
@@ -1472,9 +1480,14 @@ export default function App() {
                       {activeSection() === "identities"
                         ? filteredIdentities().length
                         : filteredApiKeys().length}{" "}
-                      results
+                      {activeSection() === "identities"
+                        ? filteredIdentities().length === 1
+                          ? "identity"
+                          : "identities"
+                        : filteredApiKeys().length === 1
+                          ? "key"
+                          : "keys"}
                     </span>
-                    <span class="muted">Sorted by newest</span>
                   </div>
                   <div class="list-body">
                     <Show
@@ -1516,7 +1529,6 @@ export default function App() {
                                     {item.environment || "No details"}
                                   </span>
                                 </div>
-                                <span class="pill">API Key</span>
                               </button>
                             )}
                           </For>

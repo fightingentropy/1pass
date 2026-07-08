@@ -12,9 +12,14 @@ import {
 } from "../vaultCrypto";
 import { ATTACHMENT_CHUNK_SIZE } from "./types";
 
-const apiBase = (import.meta.env.VITE_API_BASE as string | undefined)
-  ?.trim()
-  .replace(/\/+$/, "");
+// In local Vite dev, always hit same-origin /api (proxied to the deployed
+ // Pages Functions). Cross-origin VITE_API_BASE fails when ALLOWED_ORIGIN is
+ // production-only. Production builds still use VITE_API_BASE when set.
+const apiBase = import.meta.env.DEV
+  ? ""
+  : (import.meta.env.VITE_API_BASE as string | undefined)
+      ?.trim()
+      .replace(/\/+$/, "");
 
 export class ApiError extends Error {
   status: number;

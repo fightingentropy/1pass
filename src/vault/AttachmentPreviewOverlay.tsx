@@ -1,6 +1,7 @@
 import { Show } from "solid-js";
 import type { AttachmentPreviewState } from "./types";
 import { formatBytes, isImageAttachment, triggerBlobDownload } from "./types";
+import { CloseIcon } from "./icons";
 
 type AttachmentPreviewOverlayProps = {
   preview: AttachmentPreviewState;
@@ -33,8 +34,13 @@ export default function AttachmentPreviewOverlay(
             >
               Download
             </button>
-            <button class="icon-button" type="button" onClick={props.onClose}>
-              Close
+            <button
+              class="icon-button icon-only"
+              type="button"
+              aria-label="Close"
+              onClick={props.onClose}
+            >
+              <CloseIcon />
             </button>
           </div>
         </div>

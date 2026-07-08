@@ -1,9 +1,9 @@
 import { createSignal, onMount, Show } from "solid-js";
 import type { ApiKeyDraft, CredentialDraft, IdentityDraft } from "./types";
 import { generatePassword } from "./types";
+import { CloseIcon } from "./icons";
 
 type ModalShellProps = {
-  eyebrow: string;
   title: string;
   description: string;
   error: string;
@@ -19,12 +19,16 @@ function ModalShell(props: ModalShellProps) {
       <div class="modal" onClick={(event) => event.stopPropagation()}>
         <div class="modal-header">
           <div>
-            <p class="eyebrow">{props.eyebrow}</p>
             <h2>{props.title}</h2>
             <p class="muted">{props.description}</p>
           </div>
-          <button class="icon-button" type="button" onClick={props.onClose}>
-            Close
+          <button
+            class="icon-button icon-only"
+            type="button"
+            aria-label="Close"
+            onClick={props.onClose}
+          >
+            <CloseIcon />
           </button>
         </div>
         <form
@@ -70,7 +74,6 @@ export function IdentityModal(props: IdentityModalProps) {
 
   return (
     <ModalShell
-      eyebrow={props.isEditing ? "Edit identity" : "New identity"}
       title={props.isEditing ? "Edit identity" : "Create identity"}
       description="First name and last name are required. Everything else is optional."
       error={props.error}
@@ -211,7 +214,6 @@ export function ApiKeyModal(props: ApiKeyModalProps) {
 
   return (
     <ModalShell
-      eyebrow={props.isEditing ? "Edit API key" : "New API key"}
       title={props.isEditing ? "Edit API key" : "Create API key"}
       description="Label and API key are required. Environment and notes are optional."
       error={props.error}
@@ -293,7 +295,6 @@ export function CredentialModal(props: CredentialModalProps) {
 
   return (
     <ModalShell
-      eyebrow={props.isEditing ? "Edit password" : "New password"}
       title={props.isEditing ? "Edit password" : "Add password"}
       description="Label and password are required. Username, website and notes are optional."
       error={props.error}

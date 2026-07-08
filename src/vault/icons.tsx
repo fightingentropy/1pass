@@ -135,3 +135,33 @@ export function CheckIcon(props: { class?: string }) {
     </svg>
   );
 }
+
+export function MoreIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="5" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.6" fill="currentColor" />
+    </svg>
+  );
+}
+
+export function CloseIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 6l12 12M18 6 6 18" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function ChevronIcon(props: { class?: string }) {
+  return (
+    <svg
+      class={props.class}
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+    >
+      <path d="m7 10 5 5 5-5" {...strokeProps} />
+    </svg>
+  );
+}
