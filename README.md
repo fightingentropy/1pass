@@ -44,7 +44,7 @@ Open [http://localhost:5173](http://localhost:5173) to access the vault.
   - a **32-byte auth token**, sent as the `x-vault-auth` header to gate API reads/writes
 - The server stores only SHA-256(authToken) in `vaults.auth_hash` and compares it in constant time — it learns nothing about the encryption key
 - Fresh setup and one-time legacy migration also require a deployment-only `BOOTSTRAP_SECRET`, preventing the first public visitor from claiming an uninitialized vault
-- Failed authentication attempts are rate-limited per client through a Cloudflare Rate Limiting binding
+- Failed authentication attempts are rate-limited per hashed client address in D1, using an atomic one-minute attempt window
 - `/api/vault/meta` is intentionally public: it exposes only the KDF salt and iteration count, which the client needs to derive keys before making authenticated calls
 - AES-GCM authentication tags provide tamper detection during decrypt
 - Strict security headers ship via `public/_headers`: a `default-src 'self'` Content-Security-Policy, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and a locked-down Permissions-Policy

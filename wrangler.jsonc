@@ -4,12 +4,6 @@
   "pages_build_output_dir": "./dist",
   "compatibility_date": "2026-07-09",
   "compatibility_flags": ["nodejs_compat"],
-  "secrets": { "required": ["BOOTSTRAP_SECRET"] },
-  "observability": {
-    "enabled": true,
-    "logs": { "enabled": true, "head_sampling_rate": 1 },
-    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
-  },
   "d1_databases": [
     {
       "binding": "DB",
@@ -25,21 +19,8 @@
       "bucket_name": "1pass-vault-files"
     }
   ],
-  "ratelimits": [
-    {
-      "name": "AUTH_RATE_LIMITER",
-      "namespace_id": "41091",
-      "simple": { "limit": 60, "period": 60 }
-    }
-  ],
   "env": {
     "production": {
-      "secrets": { "required": ["BOOTSTRAP_SECRET"] },
-      "observability": {
-        "enabled": true,
-        "logs": { "enabled": true, "head_sampling_rate": 1 },
-        "traces": { "enabled": true, "head_sampling_rate": 0.05 }
-      },
       "d1_databases": [
         {
           "binding": "DB",
@@ -52,13 +33,6 @@
         {
           "binding": "VAULT_FILES",
           "bucket_name": "1pass-vault-files"
-        }
-      ],
-      "ratelimits": [
-        {
-          "name": "AUTH_RATE_LIMITER",
-          "namespace_id": "41091",
-          "simple": { "limit": 60, "period": 60 }
         }
       ]
     }

@@ -2,6 +2,7 @@ import { VAULT_BOOTSTRAP_HEADER } from "./schema";
 
 export type Env = Cloudflare.Env & {
   ALLOWED_ORIGIN?: string;
+  BOOTSTRAP_SECRET?: string;
 };
 
 export const DEFAULT_VAULT_ID = "default";
@@ -9,6 +10,8 @@ export const VAULT_AUTH_HEADER = "x-vault-auth";
 export const VAULT_HISTORY_LIMIT = 10;
 export const MAX_FILE_CHUNK_INDEX = 63;
 export const MAX_FILE_CHUNK_JSON_BYTES = 1_600_256;
+const AUTH_FAILURE_LIMIT = 60;
+const AUTH_FAILURE_WINDOW_MS = 60_000;
 
 export function getCorsHeaders(env?: Env): Record<string, string> {
   const origin = env?.ALLOWED_ORIGIN;
@@ -131,6 +134,14 @@ export async function ensureVaultFilesTable(db: Env["DB"]) {
     .run();
 }
 
+export async function ensureVaultAuthAttemptsTable(db: Env["DB"]) {
+  await db
+    .prepare(
+      "CREATE TABLE IF NOT EXISTS vault_auth_attempts (client_key TEXT PRIMARY KEY, window_started_at INTEGER NOT NULL, attempt_count INTEGER NOT NULL)",
+    )
+    .run();
+}
+
 export function isValidFileId(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -156,12 +167,30 @@ function timingSafeEqualHash(a: string, b: string) {
 }
 
 async function authFailureResponse(request: Request, env: Env) {
-  const clientKey =
+  const clientIdentity =
     request.headers.get("CF-Connecting-IP") ??
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
     "local";
-  const { success } = await env.AUTH_RATE_LIMITER.limit({ key: clientKey });
-  return success
+  const db = getDb(env);
+  await ensureVaultAuthAttemptsTable(db);
+  const now = Date.now();
+  const windowCutoff = now - AUTH_FAILURE_WINDOW_MS;
+  const clientKey = await sha256Hex(clientIdentity);
+  const attempt = await db
+    .prepare(
+      "INSERT INTO vault_auth_attempts (client_key, window_started_at, attempt_count) VALUES (?1, ?2, 1) ON CONFLICT(client_key) DO UPDATE SET window_started_at = CASE WHEN vault_auth_attempts.window_started_at < ?3 THEN excluded.window_started_at ELSE vault_auth_attempts.window_started_at END, attempt_count = CASE WHEN vault_auth_attempts.window_started_at < ?3 THEN 1 ELSE vault_auth_attempts.attempt_count + 1 END RETURNING attempt_count",
+    )
+    .bind(clientKey, now, windowCutoff)
+    .first<{ attempt_count: number }>();
+
+  if (attempt?.attempt_count === 1) {
+    await db
+      .prepare("DELETE FROM vault_auth_attempts WHERE window_started_at < ?1")
+      .bind(now - 24 * 60 * 60 * 1000)
+      .run();
+  }
+
+  return (attempt?.attempt_count ?? AUTH_FAILURE_LIMIT + 1) <= AUTH_FAILURE_LIMIT
     ? errorResponse("Unauthorized.", 401, env)
     : errorResponse("Too many authentication attempts.", 429, env);
 }

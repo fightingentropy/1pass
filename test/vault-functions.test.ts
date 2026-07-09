@@ -190,5 +190,23 @@ describe("vault Pages Functions", () => {
       "SELECT COUNT(*) AS count FROM vault_history WHERE vault_id = 'default'",
     ).first<{ count: number }>();
     expect(history?.count).toBe(0);
+
+    await testEnv.DB.prepare("DELETE FROM vault_auth_attempts").run();
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const rejected = await loadVault({
+        env: testEnv,
+        request: new Request("https://vault.test/api/vault/load", {
+          headers: { "x-vault-auth": "wrong-auth-token" },
+        }),
+      });
+      expect(rejected.status).toBe(401);
+    }
+    const rateLimited = await loadVault({
+      env: testEnv,
+      request: new Request("https://vault.test/api/vault/load", {
+        headers: { "x-vault-auth": "wrong-auth-token" },
+      }),
+    });
+    expect(rateLimited.status).toBe(429);
   });
 });
