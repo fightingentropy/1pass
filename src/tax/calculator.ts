@@ -86,6 +86,7 @@ export type AnnualAllowanceConfig = {
   regularLimit: number;
   mpaaActive: boolean;
   mpaaLimit: number;
+  thresholdStart: number;
   taperStart: number;
   taperRate: number;
   minimum: number;
@@ -96,6 +97,7 @@ export const DEFAULT_ANNUAL_ALLOWANCE: AnnualAllowanceConfig = {
   regularLimit: 60_000,
   mpaaActive: false,
   mpaaLimit: 10_000,
+  thresholdStart: 200_000,
   taperStart: 260_000,
   taperRate: 0.5,
   minimum: 10_000,
@@ -530,6 +532,8 @@ export type AnnualAllowanceUsage = {
   exceeded: boolean;
   tapered: boolean;
   mpaaActive: boolean;
+  thresholdIncome: number;
+  adjustedIncome: number;
 };
 
 function computeAnnualAllowance(
@@ -539,6 +543,24 @@ function computeAnnualAllowance(
 ): AnnualAllowanceUsage {
   const used = contribution.grossContribution + employerContribution;
   const carryForward = Math.max(0, input.annualAllowance.carryForwardUnused);
+  const isSelfEmployedOrCIS =
+    input.mode === "selfEmployed" || input.mode === "cis";
+  const earningsBeforePension = Math.max(
+    0,
+    input.grossIncome -
+      (isSelfEmployedOrCIS ? Math.max(0, input.businessExpenses) : 0),
+  );
+  const isReliefAtSource =
+    input.contributionMethod === "ras" ||
+    input.contributionMethod === "sipp";
+  // Estimate the two separate HMRC taper tests. Other taxable income and
+  // special salary-sacrifice adjustments remain outside this calculator.
+  const thresholdIncome = Math.max(
+    0,
+    earningsBeforePension -
+      (isReliefAtSource ? contribution.grossContribution : 0),
+  );
+  const adjustedIncome = earningsBeforePension + employerContribution;
 
   if (input.annualAllowance.mpaaActive) {
     // Carry-forward does NOT apply once MPAA is triggered.
@@ -555,16 +577,17 @@ function computeAnnualAllowance(
       exceeded: excess > 0,
       tapered: false,
       mpaaActive: true,
+      thresholdIncome,
+      adjustedIncome,
     };
   }
 
-  // Adjusted income for AA taper is broadly: gross income + employer
-  // contribution. We don't model salary-sacrificed contributions added back —
-  // a simplification, but close enough for ballpark figures.
-  const adjustedIncome = input.grossIncome + employerContribution;
   let baseLimit = input.annualAllowance.regularLimit;
   let tapered = false;
-  if (adjustedIncome > input.annualAllowance.taperStart) {
+  if (
+    thresholdIncome > input.annualAllowance.thresholdStart &&
+    adjustedIncome > input.annualAllowance.taperStart
+  ) {
     const reduction =
       (adjustedIncome - input.annualAllowance.taperStart) *
       input.annualAllowance.taperRate;
@@ -587,10 +610,15 @@ function computeAnnualAllowance(
     exceeded: excess > 0,
     tapered,
     mpaaActive: false,
+    thresholdIncome,
+    adjustedIncome,
   };
 }
 
 export type ContributionResult = ContributionBreakdown & {
+  requestedGrossContribution: number;
+  reliefLimit: number;
+  reliefLimited: boolean;
   higherRateRelief: number;
   incomeTaxSaved: number;
   nationalInsuranceSaved: number;
@@ -696,12 +724,34 @@ export type CalculatorResult = {
 export function calculate(input: CalculatorInput): CalculatorResult {
   const regime = taxBandsToRegime(input.bands);
 
-  const contribution = resolveContribution(
+  const requestedContribution = resolveContribution(
     input.contributionMethod,
     input.contributionBasis,
     input.contributionAmount,
     regime.reliefRate,
   );
+
+  const isSelfEmployedOrCIS =
+    input.mode === "selfEmployed" || input.mode === "cis";
+  const relevantEarnings = Math.max(
+    0,
+    input.grossIncome -
+      (isSelfEmployedOrCIS ? Math.max(0, input.businessExpenses) : 0),
+  );
+  const isReliefAtSource =
+    input.contributionMethod === "ras" ||
+    input.contributionMethod === "sipp";
+  const reliefLimit = input.age < 75 ? Math.max(3_600, relevantEarnings) : 0;
+  const reliefLimited =
+    isReliefAtSource && requestedContribution.grossContribution > reliefLimit;
+  const contribution = reliefLimited
+    ? resolveContribution(
+        input.contributionMethod,
+        "gross",
+        reliefLimit,
+        regime.reliefRate,
+      )
+    : requestedContribution;
 
   const employerContribution =
     input.mode === "employed"
@@ -747,6 +797,9 @@ export function calculate(input: CalculatorInput): CalculatorResult {
   return {
     contribution: {
       ...contribution,
+      requestedGrossContribution: requestedContribution.grossContribution,
+      reliefLimit,
+      reliefLimited,
       higherRateRelief,
       incomeTaxSaved,
       nationalInsuranceSaved,

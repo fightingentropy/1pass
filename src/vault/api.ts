@@ -1,5 +1,6 @@
 import {
   VAULT_AUTH_HEADER,
+  VAULT_BOOTSTRAP_HEADER,
   type VaultAttachment,
   type VaultEncryptedPayload,
   type VaultMeta,
@@ -8,6 +9,7 @@ import {
   decryptBytes,
   encryptBytes,
   isEncryptedChunk,
+  type EncryptedChunk,
   type VaultSession,
 } from "../vaultCrypto";
 import { ATTACHMENT_CHUNK_SIZE } from "./types";
@@ -34,9 +36,13 @@ export function isUnauthorizedError(error: unknown) {
   return error instanceof ApiError && error.status === 401;
 }
 
+export function isConflictError(error: unknown) {
+  return error instanceof ApiError && error.status === 409;
+}
+
 async function requestJson<T>(
   path: string,
-  init?: RequestInit & { authToken?: string },
+  init?: RequestInit & { authToken?: string; bootstrapSecret?: string },
 ) {
   const url = apiBase ? `${apiBase}${path}` : path;
   const headers: Record<string, string> = {
@@ -48,9 +54,13 @@ async function requestJson<T>(
   if (init?.authToken) {
     headers[VAULT_AUTH_HEADER] = init.authToken;
   }
+  if (init?.bootstrapSecret) {
+    headers[VAULT_BOOTSTRAP_HEADER] = init.bootstrapSecret;
+  }
   const response = await fetch(url, {
     ...init,
     headers,
+    cache: "no-store",
   });
 
   const text = await response.text();
@@ -85,30 +95,82 @@ export async function readVaultMeta(): Promise<VaultMeta> {
 export async function initVault(
   payload: VaultEncryptedPayload,
   authToken: string,
+  bootstrapSecret: string,
 ) {
-  await requestJson("/api/vault/init", {
+  const result = await requestJson<{ revision: number }>("/api/vault/init", {
     method: "POST",
     body: JSON.stringify({ payload }),
     authToken,
+    bootstrapSecret,
   });
+  return result.revision;
 }
 
-export async function loadVaultRecord(authToken: string) {
-  const data = await requestJson<{ payload: unknown }>("/api/vault/load", {
+export async function loadVaultRecord(
+  authToken: string,
+  bootstrapSecret = "",
+) {
+  return requestJson<{ payload: unknown; revision: number }>("/api/vault/load", {
     authToken,
+    bootstrapSecret,
   });
-  return data.payload;
 }
 
 export async function saveVaultRecord(
   payload: VaultEncryptedPayload,
   authToken: string,
+  expectedRevision: number,
+  bootstrapSecret = "",
 ) {
-  await requestJson("/api/vault/save", {
+  const result = await requestJson<{ revision: number }>("/api/vault/save", {
     method: "POST",
-    body: JSON.stringify({ payload }),
+    body: JSON.stringify({ payload, expectedRevision }),
+    authToken,
+    bootstrapSecret,
+  });
+  return result.revision;
+}
+
+export async function rotateVaultRecord(
+  payload: VaultEncryptedPayload,
+  currentAuthToken: string,
+  newAuthToken: string,
+  expectedRevision: number,
+) {
+  const result = await requestJson<{ revision: number }>("/api/vault/rotate", {
+    method: "POST",
+    body: JSON.stringify({ payload, expectedRevision, newAuthToken }),
+    authToken: currentAuthToken,
+  });
+  return result.revision;
+}
+
+export async function uploadEncryptedChunk(
+  fileId: string,
+  chunkIndex: number,
+  payload: EncryptedChunk,
+  authToken: string,
+) {
+  await requestJson("/api/vault/files/upload", {
+    method: "POST",
+    body: JSON.stringify({ id: fileId, chunkIndex, payload }),
     authToken,
   });
+}
+
+export async function downloadAttachmentEncryptedChunk(
+  fileId: string,
+  chunkIndex: number,
+  authToken: string,
+): Promise<EncryptedChunk> {
+  const data = await requestJson<{ payload: unknown }>(
+    `/api/vault/files/get?id=${encodeURIComponent(fileId)}&chunk=${chunkIndex}`,
+    { authToken },
+  );
+  if (!isEncryptedChunk(data?.payload)) {
+    throw new Error("File data is missing or corrupted.");
+  }
+  return data.payload;
 }
 
 export async function uploadAttachmentBytes(
@@ -122,11 +184,7 @@ export async function uploadAttachmentBytes(
     const start = index * ATTACHMENT_CHUNK_SIZE;
     const chunk = bytes.subarray(start, start + ATTACHMENT_CHUNK_SIZE);
     const payload = await encryptBytes(chunk, session);
-    await requestJson("/api/vault/files/upload", {
-      method: "POST",
-      body: JSON.stringify({ id: fileId, chunkIndex: index, payload }),
-      authToken: session.authToken,
-    });
+    await uploadEncryptedChunk(fileId, index, payload, session.authToken);
     onProgress?.(Math.round(((index + 1) / totalChunks) * 100));
   }
   return totalChunks;
@@ -139,14 +197,12 @@ export async function downloadAttachmentChunks(
   const chunkIndexes = Array.from({ length: attachment.chunks }, (_, i) => i);
   return Promise.all(
     chunkIndexes.map(async (index) => {
-      const data = await requestJson<{ payload: unknown }>(
-        `/api/vault/files/get?id=${encodeURIComponent(attachment.id)}&chunk=${index}`,
-        { authToken: session.authToken },
+      const payload = await downloadAttachmentEncryptedChunk(
+        attachment.id,
+        index,
+        session.authToken,
       );
-      if (!isEncryptedChunk(data?.payload)) {
-        throw new Error("File data is missing or corrupted.");
-      }
-      return decryptBytes(data.payload, session);
+      return decryptBytes(payload, session);
     }),
   );
 }
@@ -165,15 +221,11 @@ export async function deleteAttachmentRemote(
   fileId: string,
   authToken: string,
 ) {
-  try {
-    await requestJson("/api/vault/files/delete", {
-      method: "POST",
-      body: JSON.stringify({ id: fileId }),
-      authToken,
-    });
-  } catch (deleteError) {
-    console.error("Attachment delete failed", deleteError);
-  }
+  await requestJson("/api/vault/files/delete", {
+    method: "POST",
+    body: JSON.stringify({ id: fileId }),
+    authToken,
+  });
 }
 
 // Fetches an attachment's encrypted chunks and returns the raw decrypted
@@ -187,20 +239,18 @@ export async function migrateAttachmentEncryption(
 ) {
   const chunkIndexes = Array.from({ length: attachment.chunks }, (_, i) => i);
   for (const index of chunkIndexes) {
-    const data = await requestJson<{ payload: unknown }>(
-      `/api/vault/files/get?id=${encodeURIComponent(attachment.id)}&chunk=${index}`,
-      { authToken: newSession.authToken },
+    const payload = await downloadAttachmentEncryptedChunk(
+      attachment.id,
+      index,
+      newSession.authToken,
     );
-    if (!isEncryptedChunk(data?.payload)) {
-      throw new Error(`File data is missing for "${attachment.name}".`);
-    }
 
     let plainChunk: Uint8Array;
     try {
-      plainChunk = await decryptBytes(data.payload, oldSession);
+      plainChunk = await decryptBytes(payload, oldSession);
     } catch {
       // Already re-encrypted by an earlier, interrupted migration run.
-      await decryptBytes(data.payload, newSession);
+      await decryptBytes(payload, newSession);
       continue;
     }
 
@@ -208,10 +258,11 @@ export async function migrateAttachmentEncryption(
       plainChunk as Uint8Array<ArrayBuffer>,
       newSession,
     );
-    await requestJson("/api/vault/files/upload", {
-      method: "POST",
-      body: JSON.stringify({ id: attachment.id, chunkIndex: index, payload: reencrypted }),
-      authToken: newSession.authToken,
-    });
+    await uploadEncryptedChunk(
+      attachment.id,
+      index,
+      reencrypted,
+      newSession.authToken,
+    );
   }
 }

@@ -1,5 +1,6 @@
 import { onMount } from "solid-js";
 import type { ConfirmRequest } from "./types";
+import { trapFocus } from "./focus";
 
 type ConfirmDialogProps = {
   request: ConfirmRequest;
@@ -8,6 +9,7 @@ type ConfirmDialogProps = {
 
 export default function ConfirmDialog(props: ConfirmDialogProps) {
   let confirmButtonRef: HTMLButtonElement | undefined;
+  let dialogRef: HTMLDivElement | undefined;
 
   onMount(() => {
     confirmButtonRef?.focus();
@@ -19,10 +21,12 @@ export default function ConfirmDialog(props: ConfirmDialogProps) {
       onClick={() => props.onClose(false)}
     >
       <div
+        ref={dialogRef}
         class="confirm-dialog"
         role="alertdialog"
         aria-modal="true"
         aria-label={props.request.title}
+        onKeyDown={(event) => trapFocus(event, dialogRef)}
         onClick={(event) => event.stopPropagation()}
       >
         <h3>{props.request.title}</h3>

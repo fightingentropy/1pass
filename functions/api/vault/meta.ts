@@ -5,6 +5,7 @@ import {
   errorResponse,
   getDb,
   jsonResponse,
+  logError,
   optionsResponse,
 } from "./shared";
 import type { Env } from "./shared";
@@ -21,12 +22,12 @@ export async function onRequestGet({ env }: { env: Env }) {
     const db = getDb(env);
     await ensureVaultTable(db);
     const row = await db
-      .prepare("SELECT payload FROM vaults WHERE id = ?1")
+      .prepare("SELECT payload, auth_hash FROM vaults WHERE id = ?1")
       .bind(DEFAULT_VAULT_ID)
-      .first<{ payload: string }>();
+      .first<{ payload: string; auth_hash: string | null }>();
 
     if (!row?.payload) {
-      return jsonResponse({ exists: false }, env);
+      return jsonResponse({ exists: false, requiresBootstrap: true }, env);
     }
 
     let payload: unknown = null;
@@ -38,15 +39,23 @@ export async function onRequestGet({ env }: { env: Env }) {
 
     if (isVaultEncryptedPayload(payload)) {
       return jsonResponse(
-        { exists: true, version: payload.version, kdf: payload.kdf },
+        {
+          exists: true,
+          requiresBootstrap: !row.auth_hash,
+          version: payload.version,
+          kdf: payload.kdf,
+        },
         env,
       );
     }
 
     // Legacy plaintext vault from before client-side encryption existed.
-    return jsonResponse({ exists: true, version: 0 }, env);
+    return jsonResponse(
+      { exists: true, requiresBootstrap: !row.auth_hash, version: 0 },
+      env,
+    );
   } catch (error) {
-    console.error("Vault meta error", error);
+    logError("Vault metadata read failed", error);
     return errorResponse("Unable to read vault metadata.", 500, env);
   }
 }

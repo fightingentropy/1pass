@@ -5,14 +5,16 @@ type GateProps = {
   busy: boolean;
   busyLabel?: string;
   error: string;
-  onSetup: (password: string) => void;
-  onUnlock: (password: string) => void;
+  requiresBootstrap: boolean;
+  onSetup: (password: string, bootstrapSecret: string) => void;
+  onUnlock: (password: string, bootstrapSecret: string) => void;
 };
 
 export default function Gate(props: GateProps) {
   const [password, setPassword] = createSignal("");
   const [confirmPassword, setConfirmPassword] = createSignal("");
   const [showPassword, setShowPassword] = createSignal(false);
+  const [bootstrapSecret, setBootstrapSecret] = createSignal("");
   const [localError, setLocalError] = createSignal("");
   let passwordInputRef: HTMLInputElement | undefined;
 
@@ -28,19 +30,27 @@ export default function Gate(props: GateProps) {
     setLocalError("");
 
     if (props.mode === "setup") {
-      if (password().length < 8) {
-        setLocalError("Password must be at least 8 characters.");
+      if (password().length < 12) {
+        setLocalError("Use at least 12 characters for the master password.");
         return;
       }
       if (password() !== confirmPassword()) {
         setLocalError("Passwords do not match.");
         return;
       }
-      props.onSetup(password());
+      if (!bootstrapSecret().trim()) {
+        setLocalError("Enter the deployment bootstrap secret.");
+        return;
+      }
+      props.onSetup(password(), bootstrapSecret());
       return;
     }
 
-    props.onUnlock(password());
+    if (props.requiresBootstrap && !bootstrapSecret().trim()) {
+      setLocalError("Enter the deployment bootstrap secret.");
+      return;
+    }
+    props.onUnlock(password(), bootstrapSecret());
   };
 
   const visibleError = () => localError() || props.error;
@@ -91,7 +101,6 @@ export default function Gate(props: GateProps) {
                 <button
                   class="password-reveal"
                   type="button"
-                  tabindex={-1}
                   aria-label={showPassword() ? "Hide password" : "Show password"}
                   onClick={() => setShowPassword((current) => !current)}
                 >
@@ -111,6 +120,24 @@ export default function Gate(props: GateProps) {
                     setConfirmPassword(event.currentTarget.value)
                   }
                 />
+              </label>
+            </Show>
+            <Show when={props.requiresBootstrap}>
+              <label class="field">
+                <span class="field-label">Deployment bootstrap secret</span>
+                <input
+                  type="password"
+                  autocomplete="off"
+                  placeholder="Bootstrap secret"
+                  value={bootstrapSecret()}
+                  onInput={(event) =>
+                    setBootstrapSecret(event.currentTarget.value)
+                  }
+                  required
+                />
+                <span class="field-hint">
+                  Required once to initialize or migrate this deployment.
+                </span>
               </label>
             </Show>
             <Show when={Boolean(visibleError())}>

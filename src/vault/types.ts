@@ -96,7 +96,9 @@ export function createId() {
   if (typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function createVaultDefault(): VaultPayload {
@@ -156,7 +158,7 @@ function normalizeAttachment(raw: unknown): VaultAttachment | null {
     size: typeof partial.size === "number" && partial.size > 0 ? partial.size : 0,
     chunks:
       typeof partial.chunks === "number" && partial.chunks > 0
-        ? Math.floor(partial.chunks)
+        ? Math.min(64, Math.floor(partial.chunks))
         : 1,
     thumb: typeof partial.thumb === "string" ? partial.thumb : "",
     createdAt:

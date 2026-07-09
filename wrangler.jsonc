@@ -1,0 +1,66 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "1pass",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-07-09",
+  "compatibility_flags": ["nodejs_compat"],
+  "secrets": { "required": ["BOOTSTRAP_SECRET"] },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "DB",
+      "database_id": "8cdb53d2-dd7e-49b9-b7e4-66f427bd1982",
+      "preview_database_id": "DB",
+      "migrations_dir": "./migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "VAULT_FILES",
+      "bucket_name": "1pass-vault-files"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMITER",
+      "namespace_id": "41091",
+      "simple": { "limit": 60, "period": 60 }
+    }
+  ],
+  "env": {
+    "production": {
+      "secrets": { "required": ["BOOTSTRAP_SECRET"] },
+      "observability": {
+        "enabled": true,
+        "logs": { "enabled": true, "head_sampling_rate": 1 },
+        "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "DB",
+          "database_id": "8cdb53d2-dd7e-49b9-b7e4-66f427bd1982",
+          "migrations_dir": "./migrations"
+        }
+      ],
+      "r2_buckets": [
+        {
+          "binding": "VAULT_FILES",
+          "bucket_name": "1pass-vault-files"
+        }
+      ],
+      "ratelimits": [
+        {
+          "name": "AUTH_RATE_LIMITER",
+          "namespace_id": "41091",
+          "simple": { "limit": 60, "period": 60 }
+        }
+      ]
+    }
+  }
+}

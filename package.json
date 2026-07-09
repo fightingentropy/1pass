@@ -6,15 +6,30 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:local": "VITE_API_BASE=' ' vite build",
     "preview": "vite preview",
-    "test": "bun run src/vaultCrypto.sanity.ts"
+    "test": "bun run test:crypto && bun run test:maintenance && bun run test:tax && bun run test:worker",
+    "test:crypto": "bun run src/vaultCrypto.sanity.ts",
+    "test:maintenance": "bun run src/vaultMaintenance.sanity.ts",
+    "test:tax": "bun run src/tax/calculator.sanity.ts",
+    "test:worker": "BOOTSTRAP_SECRET=test-bootstrap-secret vitest run",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p test/tsconfig.json",
+    "check": "bun run typecheck && bun run test && bun run build",
+    "cf:types": "wrangler types worker-configuration.d.ts --env production --env-file /dev/null --env-interface CloudflareEnv --include-runtime false",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "pages-dev": "bun run build:local && wrangler pages dev"
   },
   "dependencies": {
-    "solid-js": "^1.9.3"
+    "solid-js": "1.9.14"
   },
   "devDependencies": {
-    "typescript": "^5.9.3",
-    "vite": "^5.4.11",
-    "vite-plugin-solid": "^2.10.2"
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
+    "@cloudflare/workers-types": "5.20260708.1",
+    "@types/node": "^26.1.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.4",
+    "vite-plugin-solid": "2.11.12",
+    "vitest": "^4.1.10",
+    "wrangler": "4.110.0"
   }
 }

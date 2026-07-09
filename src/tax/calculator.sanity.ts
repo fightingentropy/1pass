@@ -224,6 +224,8 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   console.log("\nCase 8: AA + £30k carry-forward");
   const input: CalculatorInput = {
     ...DEFAULT_INPUT,
+    grossIncome: 100_000,
+    businessExpenses: 0,
     contributionMethod: "sipp",
     contributionBasis: "gross",
     contributionAmount: 80_000,
@@ -347,6 +349,48 @@ function checkBool(label: string, actual: boolean, expected: boolean) {
   check("CIS deducted", r.scenarioWithSipp.cisDeducted, 12_000);
   check("taxable profit", r.scenarioWithSipp.taxableIncome, 65_000);
   check("SA balance with SIPP", r.scenarioWithSipp.refundOrBalance, 1_988.6);
+}
+
+// Case 13 — personal pension relief cannot exceed relevant UK earnings.
+{
+  console.log("\nCase 13: SIPP relief capped by relevant earnings");
+  const input: CalculatorInput = {
+    ...DEFAULT_INPUT,
+    mode: "cis",
+    grossIncome: 50_000,
+    businessExpenses: 5_000,
+    contributionMethod: "sipp",
+    contributionBasis: "net",
+    contributionAmount: 50_000,
+  };
+  const r = calculate(input);
+
+  check("requested gross contribution", r.contribution.requestedGrossContribution, 62_500);
+  check("relief limit", r.contribution.reliefLimit, 45_000);
+  check("capped gross contribution", r.contribution.grossContribution, 45_000);
+  check("capped provider top-up", r.contribution.governmentTopUp, 9_000);
+  checkBool("relief limited", r.contribution.reliefLimited, true);
+}
+
+// Case 14 — taper needs both threshold-income and adjusted-income tests.
+{
+  console.log("\nCase 14: AA taper does not apply at the threshold-income boundary");
+  const input: CalculatorInput = {
+    ...DEFAULT_INPUT,
+    mode: "employed",
+    grossIncome: 200_000,
+    businessExpenses: 0,
+    contributionMethod: "ras",
+    contributionBasis: "gross",
+    contributionAmount: 0,
+    employerContributionPercent: 50,
+  };
+  const r = calculate(input);
+
+  check("threshold income", r.contribution.annualAllowance.thresholdIncome, 200_000);
+  check("adjusted income", r.contribution.annualAllowance.adjustedIncome, 300_000);
+  check("untapered base AA", r.contribution.annualAllowance.baseLimit, 60_000);
+  checkBool("AA tapered", r.contribution.annualAllowance.tapered, false);
 }
 
 console.log(allPass ? "\nAll cases passed." : "\nSome checks failed — see above.");

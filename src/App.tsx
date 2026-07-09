@@ -2,19 +2,12 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  For,
   onCleanup,
   onMount,
   Show,
   untrack,
 } from "solid-js";
 import {
-  isVaultEncryptedPayload,
-  type VaultAttachment,
-  type VaultCredential,
-  type VaultEncryptedPayload,
-  type VaultIdentityItem,
-  type VaultApiKeyItem,
   type VaultPayload,
 } from "../functions/api/vault/schema";
 import "./app.css";
@@ -22,274 +15,52 @@ import {
   createVaultSession,
   decryptVaultPayload,
   encryptVaultPayload,
-  restoreVaultSession,
   type VaultSession,
 } from "./vaultCrypto";
 import {
-  deleteAttachmentRemote,
-  downloadAttachmentBlob,
   initVault,
-  isUnauthorizedError,
-  loadVaultRecord,
-  migrateAttachmentEncryption,
+  isConflictError,
   readVaultMeta,
   saveVaultRecord,
-  uploadAttachmentBytes,
 } from "./vault/api";
 import {
-  ATTACHMENT_MAX_BYTES,
   AUTO_LOCK_MS,
-  CLIPBOARD_CLEAR_MS,
   SAVE_DEBOUNCE_MS,
-  createApiKeyDraft,
-  createCredentialDraft,
-  createId,
-  createIdentityDraft,
-  createImageThumb,
   createVaultDefault,
-  identityInitials,
   normalizeVault,
   triggerBlobDownload,
-  type ApiKeyDraft,
-  type AttachmentPreviewState,
   type ConfirmRequest,
-  type CredentialDraft,
-  type CredentialModalState,
-  type EditingTarget,
-  type IdentityDraft,
   type SyncState,
-  type UploadProgress,
   type VaultSection,
 } from "./vault/types";
 import Gate from "./vault/Gate";
 import ConfirmDialog from "./vault/ConfirmDialog";
 import AttachmentPreviewOverlay from "./vault/AttachmentPreviewOverlay";
-import IdentityDetail from "./vault/IdentityDetail";
-import ApiKeyDetail from "./vault/ApiKeyDetail";
 import { ApiKeyModal, CredentialModal, IdentityModal } from "./vault/Modals";
-import { KeyIcon, PaperclipIcon } from "./vault/icons";
-
-const LEGACY_STORAGE_KEYS = {
-  passwordHash: "vault.password.hash",
-  passwordSalt: "vault.password.salt",
-};
+import VaultWorkspace from "./vault/VaultWorkspace";
+import {
+  clearLegacyPasswordMeta,
+  clearPendingRecovery,
+  readPendingRecovery,
+  storePendingRecovery,
+  unlockVaultWithPassword,
+} from "./vault/lifecycle";
+import {
+  buildCompleteBackup,
+  restoreCompleteBackup,
+  rotateMasterPassword,
+} from "./vault/maintenance";
+import {
+  ChangePasswordModal,
+  ImportBackupModal,
+  type PasswordChangeDraft,
+} from "./vault/MaintenanceModals";
+import { createVaultCrudController } from "./vault/crudController";
+import { createClipboardController } from "./vault/clipboardController";
+import { createAttachmentController } from "./vault/attachmentController";
 
 type GateView = "loading" | "setup" | "locked" | "unlocked";
-
-async function hashLegacyPassword(password: string, salt: string) {
-  const encoded = new TextEncoder().encode(`${salt}:${password}`);
-  const digest = await crypto.subtle.digest("SHA-256", encoded);
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function readLegacyPasswordMeta() {
-  const hash = localStorage.getItem(LEGACY_STORAGE_KEYS.passwordHash);
-  const salt = localStorage.getItem(LEGACY_STORAGE_KEYS.passwordSalt);
-  if (!hash || !salt) return null;
-  return { hash, salt };
-}
-
-function clearLegacyPasswordMeta() {
-  localStorage.removeItem(LEGACY_STORAGE_KEYS.passwordHash);
-  localStorage.removeItem(LEGACY_STORAGE_KEYS.passwordSalt);
-}
-
-function readPendingMigrationKdf(
-  decrypted: unknown,
-): VaultEncryptedPayload["kdf"] | null {
-  if (!decrypted || typeof decrypted !== "object") return null;
-  const pending = (decrypted as Partial<VaultPayload>).pendingMigration;
-  const kdf = pending?.kdf;
-  if (
-    kdf &&
-    kdf.name === "PBKDF2" &&
-    kdf.hash === "SHA-256" &&
-    typeof kdf.iterations === "number" &&
-    kdf.iterations > 0 &&
-    typeof kdf.salt === "string" &&
-    kdf.salt.length > 0
-  ) {
-    return kdf;
-  }
-  return null;
-}
-
-// Re-encrypts every attachment chunk from the old key to the new one.
-// Per-chunk this is idempotent (old-key decrypt, falling back to new-key for
-// chunks an earlier interrupted run already converted). Returns the number of
-// attachments that could not be migrated instead of throwing, so a broken
-// file can never brick the unlock flow.
-async function reencryptAllAttachments(
-  vault: VaultPayload,
-  oldSession: VaultSession,
-  newSession: VaultSession,
-  onProgress: (label: string) => void,
-): Promise<number> {
-  const attachments = vault.identities.flatMap(
-    (identity) => identity.attachments,
-  );
-  let failed = 0;
-  for (const [index, attachment] of attachments.entries()) {
-    onProgress(`Re-encrypting files (${index + 1}/${attachments.length})…`);
-    try {
-      await migrateAttachmentEncryption(attachment, oldSession, newSession);
-    } catch (migrateError) {
-      console.error(
-        `Attachment migration failed for "${attachment.name}"`,
-        migrateError,
-      );
-      failed += 1;
-    }
-  }
-  return failed;
-}
-
-// Two-phase v1→v2 upgrade. The new KDF salt is persisted (inside the v2
-// envelope, alongside a pendingMigration marker holding the old KDF) BEFORE
-// any attachment chunk is touched — so every key that ever encrypts a chunk
-// is durably stored first, and an interrupted migration resumes losslessly
-// on the next unlock instead of stranding chunks under a lost key.
-async function migrateVaultToV2(
-  password: string,
-  vault: VaultPayload,
-  oldSession: VaultSession,
-  onProgress: (label: string) => void,
-): Promise<VaultSession> {
-  onProgress("Upgrading vault security…");
-  const nextSession = await createVaultSession(password);
-
-  // Phase 1: persist the new envelope with a resume marker.
-  const markedPayload = await encryptVaultPayload(
-    { ...vault, pendingMigration: { kdf: oldSession.kdf } },
-    nextSession,
-  );
-  await saveVaultRecord(markedPayload, nextSession.authToken);
-
-  // Phase 2: re-encrypt attachment chunks under the new key.
-  const failed = await reencryptAllAttachments(
-    vault,
-    oldSession,
-    nextSession,
-    onProgress,
-  );
-
-  // Phase 3: clear the marker — but only once every attachment made it, so a
-  // partial failure keeps the marker and the next unlock retries.
-  onProgress("Upgrading vault security…");
-  if (failed === 0) {
-    const cleanPayload = await encryptVaultPayload(vault, nextSession);
-    await saveVaultRecord(cleanPayload, nextSession.authToken);
-  }
-  return nextSession;
-}
-
-async function unlockVaultWithPassword(
-  password: string,
-  onProgress: (label: string) => void,
-  confirmLegacyAdoption: () => Promise<boolean>,
-): Promise<{ session: VaultSession; vault: VaultPayload; migrated: boolean }> {
-  const meta = await readVaultMeta();
-  if (!meta.exists) {
-    throw new Error("No vault exists yet. Reload the page to set one up.");
-  }
-
-  if (typeof meta.version === "number" && meta.version >= 1 && meta.kdf) {
-    const session = await restoreVaultSession(password, {
-      version: meta.version,
-      kdf: meta.kdf,
-    });
-
-    let storedPayload: unknown;
-    try {
-      storedPayload = await loadVaultRecord(session.authToken);
-    } catch (loadError) {
-      if (isUnauthorizedError(loadError)) {
-        throw new Error("Incorrect password. Try again.");
-      }
-      throw loadError;
-    }
-
-    if (!isVaultEncryptedPayload(storedPayload)) {
-      throw new Error("Vault data is corrupted.");
-    }
-
-    let decrypted: unknown;
-    try {
-      decrypted = await decryptVaultPayload(storedPayload, session);
-    } catch {
-      throw new Error("Incorrect password. Try again.");
-    }
-
-    const pendingKdf = readPendingMigrationKdf(decrypted);
-    const vault = normalizeVault(decrypted);
-
-    if (session.version >= 2) {
-      if (pendingKdf) {
-        // A previous v1→v2 upgrade was interrupted mid-way; both KDFs are
-        // durably stored, so finish re-encrypting the remaining chunks.
-        onProgress("Finishing security upgrade…");
-        const oldSession = await restoreVaultSession(password, {
-          version: 1,
-          kdf: pendingKdf,
-        });
-        const failed = await reencryptAllAttachments(
-          vault,
-          oldSession,
-          session,
-          onProgress,
-        );
-        if (failed === 0) {
-          const cleanPayload = await encryptVaultPayload(vault, session);
-          await saveVaultRecord(cleanPayload, session.authToken);
-        }
-        return { session, vault, migrated: true };
-      }
-      return { session, vault, migrated: false };
-    }
-
-    // v1 vault: upgrade to the v2 scheme (stronger KDF + server auth token).
-    const nextSession = await migrateVaultToV2(
-      password,
-      vault,
-      session,
-      onProgress,
-    );
-    clearLegacyPasswordMeta();
-    return { session: nextSession, vault, migrated: true };
-  }
-
-  // Legacy plaintext vault from before client-side encryption.
-  const storedPayload = await loadVaultRecord("");
-  const legacyMeta = readLegacyPasswordMeta();
-  if (legacyMeta) {
-    const hash = await hashLegacyPassword(password, legacyMeta.salt);
-    if (hash !== legacyMeta.hash) {
-      throw new Error("Incorrect password. Try again.");
-    }
-  } else {
-    // No local record of the legacy password exists on this device, so the
-    // password just typed would silently become the vault's master password.
-    // Make that adoption explicit instead of silent.
-    const confirmed = await confirmLegacyAdoption();
-    if (!confirmed) {
-      throw new Error("Unlock cancelled.");
-    }
-  }
-
-  const vault = normalizeVault(storedPayload);
-  const session = await createVaultSession(password);
-  const encryptedPayload = await encryptVaultPayload(vault, session);
-  await saveVaultRecord(encryptedPayload, session.authToken);
-  clearLegacyPasswordMeta();
-  return { session, vault, migrated: true };
-}
-
 export default function App() {
-  let copiedSecretResetTimer: number | undefined;
-  let copiedFieldResetTimer: number | undefined;
-  let clipboardClearTimer: number | undefined;
   let saveTimer: number | undefined;
   let autoLockTimer: number | undefined;
   let saveVersion = 0;
@@ -308,36 +79,27 @@ export default function App() {
   const [selectedIdentityId, setSelectedIdentityId] = createSignal("");
   const [selectedApiKeyId, setSelectedApiKeyId] = createSignal("");
   const [isApiKeyVisible, setIsApiKeyVisible] = createSignal(false);
-  const [copiedApiKeyId, setCopiedApiKeyId] = createSignal("");
-  const [copiedField, setCopiedField] = createSignal("");
-  const [isModalOpen, setIsModalOpen] = createSignal(false);
-  const [draft, setDraft] = createSignal<IdentityDraft>(createIdentityDraft());
-  const [apiKeyDraft, setApiKeyDraft] = createSignal<ApiKeyDraft>(createApiKeyDraft());
-  const [modalError, setModalError] = createSignal("");
   const [syncEnabled, setSyncEnabled] = createSignal(false);
-  const [editingTarget, setEditingTarget] = createSignal<EditingTarget | null>(null);
   const [session, setSession] = createSignal<VaultSession | null>(null);
+  const [serverRevision, setServerRevision] = createSignal(0);
+  const [requiresBootstrap, setRequiresBootstrap] = createSignal(true);
   const [persistedVaultJson, setPersistedVaultJson] = createSignal(
     JSON.stringify(createVaultDefault()),
   );
-  const [uploadProgress, setUploadProgress] = createSignal<UploadProgress | null>(
-    null,
-  );
-  const [attachmentError, setAttachmentError] = createSignal("");
-  const [attachmentBusyId, setAttachmentBusyId] = createSignal("");
-  const [attachmentPreview, setAttachmentPreview] =
-    createSignal<AttachmentPreviewState | null>(null);
-  const [credentialModal, setCredentialModal] =
-    createSignal<CredentialModalState | null>(null);
-  const [credentialDraft, setCredentialDraft] = createSignal<CredentialDraft>(
-    createCredentialDraft(),
-  );
-  const [credentialError, setCredentialError] = createSignal("");
   const [confirmRequest, setConfirmRequest] = createSignal<ConfirmRequest | null>(
     null,
   );
-
-  const isEditing = createMemo(() => editingTarget() !== null);
+  const [maintenanceLabel, setMaintenanceLabel] = createSignal("");
+  const [passwordModalOpen, setPasswordModalOpen] = createSignal(false);
+  const [passwordDraft, setPasswordDraft] = createSignal<PasswordChangeDraft>({
+    currentPassword: "",
+    newPassword: "",
+    confirmPassword: "",
+  });
+  const [passwordError, setPasswordError] = createSignal("");
+  const [importFile, setImportFile] = createSignal<File | null>(null);
+  const [importPassword, setImportPassword] = createSignal("");
+  const [importError, setImportError] = createSignal("");
 
   const requestConfirm = (options: Omit<ConfirmRequest, "resolve">) =>
     new Promise<boolean>((resolve) => {
@@ -350,6 +112,48 @@ export default function App() {
     current?.resolve(confirmed);
   };
 
+  const {
+    isModalOpen,
+    draft,
+    setDraft,
+    apiKeyDraft,
+    setApiKeyDraft,
+    modalError,
+    editingTarget,
+    credentialModal,
+    credentialDraft,
+    setCredentialDraft,
+    credentialError,
+    isEditing,
+    handleOpenIdentityModal,
+    handleOpenApiKeyModal,
+    handleOpenEditIdentityModal,
+    handleOpenEditApiKeyModal,
+    handleCloseModal,
+    handleSaveIdentity,
+    handleSaveApiKey,
+    handleOpenCredentialModal,
+    handleCloseCredentialModal,
+    handleSaveCredential,
+    handleDeleteCredential,
+    handleDeleteApiKey,
+    resetDialogs,
+  } = createVaultCrudController({
+    vault,
+    setVault,
+    setSelectedIdentityId,
+    setSelectedApiKeyId,
+    requestConfirm,
+  });
+
+  const {
+    copiedApiKeyId,
+    copiedField,
+    handleCopyApiKey,
+    handleCopyField,
+    handleCopySecret,
+  } = createClipboardController(setError);
+
   onMount(() => {
     void (async () => {
       setBusy(true);
@@ -357,6 +161,7 @@ export default function App() {
 
       try {
         const meta = await readVaultMeta();
+        setRequiresBootstrap(Boolean(meta.requiresBootstrap));
         setView(meta.exists ? "locked" : "setup");
       } catch (statusError) {
         console.error(statusError);
@@ -445,6 +250,7 @@ export default function App() {
     const nextVault = vault();
     const nextVaultJson = JSON.stringify(nextVault);
     if (nextVaultJson === persistedVaultJson()) {
+      clearPendingRecovery();
       if (syncState() === "dirty" || syncState() === "error") {
         setSyncState("idle");
       }
@@ -456,10 +262,17 @@ export default function App() {
     try {
       const encryptedPayload = await encryptVaultPayload(nextVault, currentSession);
       if (thisVersion !== saveVersion) return true;
-      await saveVaultRecord(encryptedPayload, currentSession.authToken);
+      const revision = await saveVaultRecord(
+        encryptedPayload,
+        currentSession.authToken,
+        serverRevision(),
+      );
       if (thisVersion !== saveVersion) return true;
       setPersistedVaultJson(nextVaultJson);
+      setServerRevision(revision);
+      clearPendingRecovery();
       setLastSaved(Date.now());
+      setError("");
       if (JSON.stringify(vault()) === nextVaultJson) {
         setSyncState("idle");
       }
@@ -467,6 +280,11 @@ export default function App() {
     } catch (saveError) {
       if (thisVersion !== saveVersion) return true;
       console.error(saveError);
+      if (isConflictError(saveError)) {
+        setError(
+          "This vault changed in another tab or device. Lock and unlock again before saving.",
+        );
+      }
       setSyncState("error");
       return false;
     }
@@ -481,6 +299,29 @@ export default function App() {
     saveQueue = run.catch(() => false);
     return run;
   };
+
+  const {
+    uploadProgress,
+    attachmentError,
+    setAttachmentError,
+    attachmentBusyId,
+    attachmentPreview,
+    closeAttachmentPreview,
+    handleDeleteIdentity,
+    handleAddAttachments,
+    handleOpenAttachment,
+    handleDownloadAttachment,
+    handleDeleteAttachment,
+    resetAttachments,
+  } = createAttachmentController({
+    vault,
+    setVault,
+    session,
+    selectedIdentityId,
+    setSelectedIdentityId,
+    persistVault,
+    requestConfirm,
+  });
 
   createEffect(() => {
     const currentSession = session();
@@ -529,17 +370,23 @@ export default function App() {
     setIsApiKeyVisible(false);
   });
 
-  const handleSetup = async (password: string) => {
+  const handleSetup = async (password: string, bootstrapSecret: string) => {
     setError("");
     setBusy(true);
     try {
       const freshVault = createVaultDefault();
       const nextSession = await createVaultSession(password);
       const encryptedPayload = await encryptVaultPayload(freshVault, nextSession);
-      await initVault(encryptedPayload, nextSession.authToken);
+      const revision = await initVault(
+        encryptedPayload,
+        nextSession.authToken,
+        bootstrapSecret,
+      );
       clearLegacyPasswordMeta();
       setVault(freshVault);
       setSession(nextSession);
+      setServerRevision(revision);
+      setRequiresBootstrap(false);
       setPersistedVaultJson(JSON.stringify(freshVault));
       setSyncEnabled(true);
       setSyncState("idle");
@@ -558,7 +405,7 @@ export default function App() {
     }
   };
 
-  const handleUnlock = async (password: string) => {
+  const handleUnlock = async (password: string, bootstrapSecret: string) => {
     setError("");
     setBusy(true);
     setBusyLabel("");
@@ -567,7 +414,8 @@ export default function App() {
         session: nextSession,
         vault: remoteVault,
         migrated,
-      } = await unlockVaultWithPassword(password, setBusyLabel, () =>
+        revision,
+      } = await unlockVaultWithPassword(password, bootstrapSecret, setBusyLabel, () =>
         requestConfirm({
           title: "Set master password?",
           message:
@@ -576,8 +424,32 @@ export default function App() {
           danger: false,
         }),
       );
+      let vaultToOpen = remoteVault;
+      const pendingRecovery = readPendingRecovery();
+      if (pendingRecovery) {
+        try {
+          const recovered = normalizeVault(
+            await decryptVaultPayload(pendingRecovery.payload, nextSession),
+          );
+          const remoteChanged = pendingRecovery.baseRevision !== revision;
+          const restore = await requestConfirm({
+            title: "Restore unsynced changes?",
+            message: remoteChanged
+              ? "This browser preserved encrypted unsynced changes, but the server changed afterward. Restore the local copy and replace the server version on the next save?"
+              : "This browser preserved encrypted changes when it auto-locked offline. Restore them now?",
+            confirmLabel: "Restore changes",
+            danger: remoteChanged,
+          });
+          if (restore) vaultToOpen = recovered;
+          else clearPendingRecovery();
+        } catch {
+          clearPendingRecovery();
+        }
+      }
       setSession(nextSession);
-      setVault(remoteVault);
+      setServerRevision(revision);
+      setRequiresBootstrap(false);
+      setVault(vaultToOpen);
       setPersistedVaultJson(JSON.stringify(remoteVault));
       setSyncEnabled(true);
       setSyncState("idle");
@@ -597,26 +469,40 @@ export default function App() {
     }
   };
 
-  const closeAttachmentPreview = () => {
-    const preview = attachmentPreview();
-    if (preview) URL.revokeObjectURL(preview.url);
-    setAttachmentPreview(null);
-  };
-
   const handleLock = async (options?: { auto?: boolean }) => {
-    if (view() !== "unlocked") return;
+    if (view() !== "unlocked" || maintenanceLabel()) return;
 
     const flushed = await persistVault();
+    let lockNotice = "";
     if (!flushed && syncState() === "error") {
-      if (options?.auto) return;
-      const proceed = await requestConfirm({
-        title: "Sync failed",
-        message:
-          "Your latest changes could not be saved to the server. Lock anyway and discard them?",
-        confirmLabel: "Lock anyway",
-        danger: true,
-      });
-      if (!proceed) return;
+      if (options?.auto) {
+        const currentSession = session();
+        if (currentSession) {
+          try {
+            await storePendingRecovery(
+              vault(),
+              currentSession,
+              serverRevision(),
+            );
+            lockNotice =
+              "Auto-locked. Unsynced changes were preserved encrypted in this browser.";
+          } catch (recoveryError) {
+            console.error("Unable to preserve pending vault changes", recoveryError);
+            lockNotice =
+              "Auto-locked after sync failed. Some unsynced changes could not be preserved.";
+          }
+        }
+      } else {
+        const proceed = await requestConfirm({
+          title: "Sync failed",
+          message:
+            "Your latest changes could not be saved to the server. Lock anyway and discard them?",
+          confirmLabel: "Lock anyway",
+          danger: true,
+        });
+        if (!proceed) return;
+        clearPendingRecovery();
+      }
     }
 
     saveVersion += 1;
@@ -624,14 +510,12 @@ export default function App() {
       window.clearTimeout(saveTimer);
       saveTimer = undefined;
     }
-    closeAttachmentPreview();
-    setUploadProgress(null);
-    setAttachmentError("");
-    setAttachmentBusyId("");
-    setCredentialModal(null);
+    resetAttachments();
+    resetDialogs();
     setConfirmRequest(null);
     setSyncEnabled(false);
     setSession(null);
+    setServerRevision(0);
     setView("locked");
     setVault(createVaultDefault());
     setActiveSection("apiKeys");
@@ -642,23 +526,27 @@ export default function App() {
     setLastSaved(null);
     setSyncState("idle");
     setPersistedVaultJson(JSON.stringify(createVaultDefault()));
-    setIsModalOpen(false);
-    setEditingTarget(null);
-    setError("");
+    setPasswordModalOpen(false);
+    setImportFile(null);
+    setImportPassword("");
+    setError(lockNotice);
   };
 
   const handleExport = async () => {
     const currentSession = session();
-    if (!currentSession) return;
+    if (!currentSession || maintenanceLabel()) return;
+    setMaintenanceLabel("Preparing backup…");
+    setError("");
     try {
-      const encryptedPayload = await encryptVaultPayload(vault(), currentSession);
-      const exportData = {
-        app: "1pass-vault-backup",
-        exportedAt: new Date().toISOString(),
-        note: "Encrypted with your master password. Attachment files are not included.",
-        payload: encryptedPayload,
-      };
-      const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+      if (!(await persistVault())) {
+        throw new Error("The latest vault changes must sync before exporting.");
+      }
+      const backup = await buildCompleteBackup(
+        vault(),
+        currentSession,
+        setMaintenanceLabel,
+      );
+      const blob = new Blob([JSON.stringify(backup)], {
         type: "application/json",
       });
       const url = URL.createObjectURL(blob);
@@ -669,563 +557,174 @@ export default function App() {
       window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
     } catch (exportError) {
       console.error(exportError);
+      setError(
+        exportError instanceof Error
+          ? exportError.message
+          : "Unable to create the backup.",
+      );
+    } finally {
+      setMaintenanceLabel("");
     }
   };
 
-  const handleOpenIdentityModal = () => {
-    setDraft(createIdentityDraft());
-    setEditingTarget(null);
-    setModalError("");
-    setIsModalOpen(true);
+  const handleChooseImportFile = (file: File) => {
+    if (maintenanceLabel()) return;
+    setImportFile(file);
+    setImportPassword("");
+    setImportError("");
   };
 
-  const handleOpenApiKeyModal = () => {
-    setApiKeyDraft(createApiKeyDraft());
-    setEditingTarget(null);
-    setModalError("");
-    setIsModalOpen(true);
-  };
-
-  const handleOpenEditIdentityModal = (identity: VaultIdentityItem) => {
-    setDraft({
-      firstName: identity.firstName,
-      lastName: identity.lastName,
-      email: identity.email,
-      phone: identity.phone,
-      address: identity.address,
-      nino: identity.nino,
-      nhsNumber: identity.nhsNumber,
-      passNumber: identity.passNumber,
-      utr: identity.utr,
-      govGatewayId: identity.govGatewayId,
-      notes: identity.notes,
-    });
-    setEditingTarget({ section: "identities", id: identity.id });
-    setModalError("");
-    setIsModalOpen(true);
-  };
-
-  const handleOpenEditApiKeyModal = (item: VaultApiKeyItem) => {
-    setApiKeyDraft({
-      label: item.label,
-      service: item.service,
-      key: item.key,
-      environment: item.environment,
-      notes: item.notes,
-    });
-    setEditingTarget({ section: "apiKeys", id: item.id });
-    setModalError("");
-    setIsModalOpen(true);
-  };
-
-  const handleCloseModal = () => {
-    setIsModalOpen(false);
-    setModalError("");
-    setEditingTarget(null);
-  };
-
-  const handleSaveIdentity = () => {
-    setModalError("");
-
-    const current = draft();
-    if (!current.firstName.trim() || !current.lastName.trim()) {
-      setModalError("First name and last name are required.");
+  const handleImportBackup = async () => {
+    const file = importFile();
+    const password = importPassword();
+    const currentSession = session();
+    if (!file || !currentSession || maintenanceLabel()) return;
+    if (!password) {
+      setImportError("Enter the master password used by this backup.");
       return;
     }
 
-    const now = Date.now();
-    const patch = {
-      firstName: current.firstName.trim(),
-      lastName: current.lastName.trim(),
-      email: current.email.trim(),
-      phone: current.phone.trim(),
-      address: current.address.trim(),
-      nino: current.nino.trim(),
-      nhsNumber: current.nhsNumber.trim(),
-      passNumber: current.passNumber.trim(),
-      utr: current.utr.trim(),
-      govGatewayId: current.govGatewayId.trim(),
-      notes: current.notes.trim(),
-    };
-    const currentTarget = editingTarget();
-    const activeEditingId =
-      currentTarget?.section === "identities" ? currentTarget.id : null;
-
-    if (activeEditingId) {
-      setVault((currentVault) => ({
-        ...currentVault,
-        identities: currentVault.identities.map((item) =>
-          item.id === activeEditingId
-            ? { ...item, ...patch, updatedAt: now }
-            : item,
-        ),
-      }));
-      setSelectedIdentityId(activeEditingId);
-    } else {
-      const identity: VaultIdentityItem = {
-        id: createId(),
-        ...patch,
-        attachments: [],
-        credentials: [],
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      setVault((currentVault) => ({
-        ...currentVault,
-        identities: [identity, ...currentVault.identities],
-      }));
-      setSelectedIdentityId(identity.id);
-    }
-
-    setIsModalOpen(false);
-    setEditingTarget(null);
-  };
-
-  const handleSaveApiKey = () => {
-    setModalError("");
-
-    const current = apiKeyDraft();
-    if (!current.label.trim() || !current.key.trim()) {
-      setModalError("Label and API key are required.");
-      return;
-    }
-
-    const now = Date.now();
-    const patch = {
-      label: current.label.trim(),
-      service: current.service.trim(),
-      key: current.key.trim(),
-      environment: current.environment.trim(),
-      notes: current.notes.trim(),
-    };
-    const currentTarget = editingTarget();
-    const activeEditingId =
-      currentTarget?.section === "apiKeys" ? currentTarget.id : null;
-
-    if (activeEditingId) {
-      setVault((currentVault) => ({
-        ...currentVault,
-        apiKeys: currentVault.apiKeys.map((item) =>
-          item.id === activeEditingId
-            ? { ...item, ...patch, updatedAt: now }
-            : item,
-        ),
-      }));
-      setSelectedApiKeyId(activeEditingId);
-    } else {
-      const apiKey: VaultApiKeyItem = {
-        id: createId(),
-        ...patch,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      setVault((currentVault) => ({
-        ...currentVault,
-        apiKeys: [apiKey, ...currentVault.apiKeys],
-      }));
-      setSelectedApiKeyId(apiKey.id);
-    }
-
-    setIsModalOpen(false);
-    setEditingTarget(null);
-  };
-
-  const handleOpenCredentialModal = (
-    identityId: string,
-    credential: VaultCredential | null,
-  ) => {
-    setCredentialDraft(
-      credential
-        ? {
-            label: credential.label,
-            username: credential.username,
-            password: credential.password,
-            website: credential.website,
-            notes: credential.notes,
-          }
-        : createCredentialDraft(),
-    );
-    setCredentialError("");
-    setCredentialModal({ identityId, credential });
-  };
-
-  const handleCloseCredentialModal = () => {
-    setCredentialModal(null);
-    setCredentialError("");
-  };
-
-  const handleSaveCredential = () => {
-    const state = credentialModal();
-    if (!state) return;
-    setCredentialError("");
-
-    const current = credentialDraft();
-    if (!current.label.trim() || !current.password) {
-      setCredentialError("Label and password are required.");
-      return;
-    }
-
-    const now = Date.now();
-    const patch = {
-      label: current.label.trim(),
-      username: current.username.trim(),
-      password: current.password,
-      website: current.website.trim(),
-      notes: current.notes.trim(),
-    };
-
-    setVault((currentVault) => ({
-      ...currentVault,
-      identities: currentVault.identities.map((item) => {
-        if (item.id !== state.identityId) return item;
-        if (state.credential) {
-          return {
-            ...item,
-            credentials: item.credentials.map((existing) =>
-              existing.id === state.credential!.id
-                ? { ...existing, ...patch, updatedAt: now }
-                : existing,
-            ),
-            updatedAt: now,
-          };
-        }
-        const credential: VaultCredential = {
-          id: createId(),
-          ...patch,
-          createdAt: now,
-          updatedAt: now,
-        };
-        return {
-          ...item,
-          credentials: [...item.credentials, credential],
-          updatedAt: now,
-        };
-      }),
-    }));
-
-    setCredentialModal(null);
-  };
-
-  const handleDeleteCredential = async (
-    identityId: string,
-    credential: VaultCredential,
-  ) => {
-    const confirmed = await requestConfirm({
-      title: "Delete password",
-      message: `Delete "${credential.label || "this password"}"? This cannot be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
-    });
-    if (!confirmed) return;
-
-    setVault((currentVault) => ({
-      ...currentVault,
-      identities: currentVault.identities.map((item) =>
-        item.id === identityId
-          ? {
-              ...item,
-              credentials: item.credentials.filter(
-                (existing) => existing.id !== credential.id,
-              ),
-              updatedAt: Date.now(),
-            }
-          : item,
-      ),
-    }));
-  };
-
-  const copyToClipboard = async (text: string): Promise<void> => {
+    let syncPaused = false;
+    setImportError("");
+    setMaintenanceLabel("Reading encrypted backup…");
     try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      // Fallback for restricted contexts
-    }
-    const textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textarea);
-  };
-
-  // Best effort: clears the clipboard after a delay, but only when it still
-  // holds the copied secret (skips silently where reading is not permitted).
-  const scheduleClipboardClear = (copied: string) => {
-    if (clipboardClearTimer) window.clearTimeout(clipboardClearTimer);
-    clipboardClearTimer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const current = await navigator.clipboard.readText();
-          if (current === copied) {
-            await navigator.clipboard.writeText("");
-          }
-        } catch {
-          // Clipboard read not available; leave it untouched.
-        }
-      })();
-    }, CLIPBOARD_CLEAR_MS);
-  };
-
-  const handleCopyApiKey = async (item: VaultApiKeyItem) => {
-    const key = item.key.trim();
-    if (!key) return;
-
-    try {
-      await copyToClipboard(key);
-      scheduleClipboardClear(key);
-      setCopiedApiKeyId(item.id);
-      if (copiedSecretResetTimer) {
-        window.clearTimeout(copiedSecretResetTimer);
+      if (!(await persistVault())) {
+        throw new Error("The current vault must sync before it can be replaced.");
       }
-      copiedSecretResetTimer = window.setTimeout(() => {
-        setCopiedApiKeyId((current) => (current === item.id ? "" : current));
-      }, 1800);
-    } catch (copyError) {
-      console.error(copyError);
-      setError("Unable to copy the API key.");
-    }
-  };
+      setSyncEnabled(false);
+      syncPaused = true;
+      const restored = await restoreCompleteBackup({
+        file,
+        password,
+        currentVault: vault(),
+        currentSession,
+        revision: serverRevision(),
+        onProgress: setMaintenanceLabel,
+      });
 
-  const markFieldCopied = (fieldKey: string) => {
-    setCopiedField(fieldKey);
-    if (copiedFieldResetTimer) window.clearTimeout(copiedFieldResetTimer);
-    copiedFieldResetTimer = window.setTimeout(() => {
-      setCopiedField((current) => (current === fieldKey ? "" : current));
-    }, 1800);
-  };
-
-  const handleCopyField = async (value: string, fieldKey: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    try {
-      await copyToClipboard(trimmed);
-      markFieldCopied(fieldKey);
-    } catch {
-      setError("Unable to copy to clipboard.");
-    }
-  };
-
-  const handleCopySecret = async (value: string, fieldKey: string) => {
-    if (!value) return;
-    try {
-      await copyToClipboard(value);
-      scheduleClipboardClear(value);
-      markFieldCopied(fieldKey);
-    } catch {
-      setError("Unable to copy to clipboard.");
-    }
-  };
-
-  const handleDeleteIdentity = async (identity: VaultIdentityItem) => {
-    const confirmed = await requestConfirm({
-      title: "Delete identity",
-      message: `Delete "${identity.firstName} ${identity.lastName}" and its ${identity.attachments.length} file(s)? This cannot be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
-    });
-    if (!confirmed) return;
-
-    const authToken = session()?.authToken ?? "";
-    setVault((currentVault) => ({
-      ...currentVault,
-      identities: currentVault.identities.filter((item) => item.id !== identity.id),
-    }));
-    identity.attachments.forEach((attachment) => {
-      void deleteAttachmentRemote(attachment.id, authToken);
-    });
-    if (selectedIdentityId() === identity.id) {
+      const nextJson = JSON.stringify(restored.vault);
+      setVault(restored.vault);
+      setPersistedVaultJson(nextJson);
+      setServerRevision(restored.revision);
+      setLastSaved(Date.now());
+      setSyncState("idle");
+      clearPendingRecovery();
       setSelectedIdentityId("");
-    }
-  };
-
-  const handleDeleteApiKey = async (item: VaultApiKeyItem) => {
-    const confirmed = await requestConfirm({
-      title: "Delete API key",
-      message: `Delete "${item.label}"? This cannot be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
-    });
-    if (!confirmed) return;
-
-    setVault((currentVault) => ({
-      ...currentVault,
-      apiKeys: currentVault.apiKeys.filter((existing) => existing.id !== item.id),
-    }));
-    if (selectedApiKeyId() === item.id) {
       setSelectedApiKeyId("");
-    }
-  };
+      setImportFile(null);
+      setImportPassword("");
+      setSyncEnabled(true);
+      syncPaused = false;
 
-  const handleAddAttachments = async (identityId: string, files: File[]) => {
-    const currentSession = session();
-    if (!currentSession || files.length === 0) return;
-    // Drag-drop and paste bypass the disabled "+ Add file" button — reject
-    // re-entrant uploads instead of interleaving progress state.
-    if (uploadProgress()) return;
-
-    setAttachmentError("");
-    for (const [fileIndex, file] of files.entries()) {
-      const progressBase = {
-        name: file.name,
-        fileIndex: fileIndex + 1,
-        fileCount: files.length,
-      };
-      if (file.size === 0) {
-        setAttachmentError(`"${file.name}" is empty and was skipped.`);
-        continue;
-      }
-      if (file.size > ATTACHMENT_MAX_BYTES) {
+      if (restored.cleanupFailures > 0) {
         setAttachmentError(
-          `"${file.name}" is larger than 25 MB and was skipped.`,
-        );
-        continue;
-      }
-
-      const fileId = createId();
-      setUploadProgress({ ...progressBase, percent: 0 });
-      try {
-        const bytes = new Uint8Array(await file.arrayBuffer());
-        const thumb = await createImageThumb(file);
-        const chunks = await uploadAttachmentBytes(
-          fileId,
-          bytes,
-          currentSession,
-          (percent) => setUploadProgress({ ...progressBase, percent }),
-        );
-
-        const attachment: VaultAttachment = {
-          id: fileId,
-          name: file.name,
-          mimeType: file.type || "application/octet-stream",
-          size: file.size,
-          chunks,
-          thumb,
-          createdAt: Date.now(),
-        };
-
-        if (!vault().identities.some((item) => item.id === identityId)) {
-          void deleteAttachmentRemote(fileId, currentSession.authToken);
-          setAttachmentError("The identity no longer exists.");
-          break;
-        }
-
-        setVault((currentVault) => ({
-          ...currentVault,
-          identities: currentVault.identities.map((item) =>
-            item.id === identityId
-              ? {
-                  ...item,
-                  attachments: [...item.attachments, attachment],
-                  updatedAt: Date.now(),
-                }
-              : item,
-          ),
-        }));
-      } catch (uploadError) {
-        console.error(uploadError);
-        void deleteAttachmentRemote(fileId, currentSession.authToken);
-        setAttachmentError(
-          uploadError instanceof Error
-            ? `Upload of "${file.name}" failed: ${uploadError.message}`
-            : `Upload of "${file.name}" failed.`,
+          "The backup was restored, but some replaced encrypted files could not be cleaned up.",
         );
       }
-    }
-    setUploadProgress(null);
-  };
-
-  const handleOpenAttachment = async (attachment: VaultAttachment) => {
-    const currentSession = session();
-    if (!currentSession || attachmentBusyId()) return;
-
-    setAttachmentError("");
-    setAttachmentBusyId(attachment.id);
-    try {
-      const blob = await downloadAttachmentBlob(attachment, currentSession);
-      const url = URL.createObjectURL(blob);
-      if (
-        attachment.mimeType.startsWith("image/") ||
-        attachment.mimeType === "application/pdf"
-      ) {
-        closeAttachmentPreview();
-        setAttachmentPreview({ attachment, url });
-      } else {
-        triggerBlobDownload(url, attachment.name);
-        window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
-      }
-    } catch (openError) {
-      console.error(openError);
-      setAttachmentError(
-        openError instanceof Error ? openError.message : "Unable to open the file.",
+    } catch (restoreError) {
+      console.error(restoreError);
+      setImportError(
+        restoreError instanceof Error
+          ? restoreError.message
+          : "Unable to restore this backup.",
       );
     } finally {
-      setAttachmentBusyId("");
+      if (syncPaused) setSyncEnabled(true);
+      setMaintenanceLabel("");
     }
   };
 
-  const handleDownloadAttachment = async (attachment: VaultAttachment) => {
-    const currentSession = session();
-    if (!currentSession || attachmentBusyId()) return;
-
-    setAttachmentError("");
-    setAttachmentBusyId(attachment.id);
-    try {
-      const blob = await downloadAttachmentBlob(attachment, currentSession);
-      const url = URL.createObjectURL(blob);
-      triggerBlobDownload(url, attachment.name);
-      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
-    } catch (downloadError) {
-      console.error(downloadError);
-      setAttachmentError(
-        downloadError instanceof Error
-          ? downloadError.message
-          : "Unable to download the file.",
-      );
-    } finally {
-      setAttachmentBusyId("");
-    }
-  };
-
-  const handleDeleteAttachment = async (
-    identityId: string,
-    attachment: VaultAttachment,
-  ) => {
-    const confirmed = await requestConfirm({
-      title: "Delete file",
-      message: `Delete "${attachment.name}"? This cannot be undone.`,
-      confirmLabel: "Delete",
-      danger: true,
+  const openPasswordModal = () => {
+    if (maintenanceLabel()) return;
+    setPasswordDraft({
+      currentPassword: "",
+      newPassword: "",
+      confirmPassword: "",
     });
-    if (!confirmed) return;
-
-    const authToken = session()?.authToken ?? "";
-    setAttachmentError("");
-    setVault((currentVault) => ({
-      ...currentVault,
-      identities: currentVault.identities.map((item) =>
-        item.id === identityId
-          ? {
-              ...item,
-              attachments: item.attachments.filter(
-                (existing) => existing.id !== attachment.id,
-              ),
-              updatedAt: Date.now(),
-            }
-          : item,
-      ),
-    }));
-    void deleteAttachmentRemote(attachment.id, authToken);
+    setPasswordError("");
+    setPasswordModalOpen(true);
   };
 
+  const handleChangePassword = async () => {
+    const currentSession = session();
+    const current = passwordDraft();
+    if (!currentSession || maintenanceLabel()) return;
+    if (!current.currentPassword) {
+      setPasswordError("Enter your current master password.");
+      return;
+    }
+    if (current.newPassword.length < 12) {
+      setPasswordError("The new master password must be at least 12 characters.");
+      return;
+    }
+    if (current.newPassword !== current.confirmPassword) {
+      setPasswordError("The new passwords do not match.");
+      return;
+    }
+    if (current.currentPassword === current.newPassword) {
+      setPasswordError("Choose a different master password.");
+      return;
+    }
+
+    let syncPaused = false;
+    setPasswordError("");
+    setPasswordModalOpen(false);
+    setMaintenanceLabel("Verifying current password…");
+    try {
+      if (!(await persistVault())) {
+        throw new Error("The vault must sync before changing its password.");
+      }
+      setSyncEnabled(false);
+      syncPaused = true;
+      const rotated = await rotateMasterPassword({
+        currentPassword: current.currentPassword,
+        newPassword: current.newPassword,
+        vault: vault(),
+        currentSession,
+        revision: serverRevision(),
+        onProgress: setMaintenanceLabel,
+      });
+
+      const nextJson = JSON.stringify(rotated.vault);
+      setSession(rotated.session);
+      setVault(rotated.vault);
+      setPersistedVaultJson(nextJson);
+      setServerRevision(rotated.revision);
+      setLastSaved(Date.now());
+      setSyncState("idle");
+      clearPendingRecovery();
+      setPasswordDraft({
+        currentPassword: "",
+        newPassword: "",
+        confirmPassword: "",
+      });
+      setSyncEnabled(true);
+      syncPaused = false;
+
+      if (rotated.cleanupFailures > 0) {
+        setAttachmentError(
+          "The password changed, but some old encrypted file copies could not be cleaned up.",
+        );
+      }
+      setError("Master password changed successfully.");
+    } catch (changeError) {
+      console.error(changeError);
+      setPasswordError(
+        changeError instanceof Error
+          ? changeError.message
+          : "Unable to change the master password.",
+      );
+      setPasswordModalOpen(true);
+    } finally {
+      if (syncPaused) setSyncEnabled(true);
+      setMaintenanceLabel("");
+    }
+  };
   const handleKeydown = (event: KeyboardEvent) => {
     // Escape during IME composition cancels the composition, not the overlay.
     if (event.isComposing) return;
     if (event.key === "Escape") {
+      if (maintenanceLabel()) return;
       if (attachmentPreview()) {
         closeAttachmentPreview();
         return;
@@ -1236,6 +735,17 @@ export default function App() {
       }
       if (credentialModal()) {
         handleCloseCredentialModal();
+        return;
+      }
+      if (passwordModalOpen()) {
+        setPasswordModalOpen(false);
+        setPasswordError("");
+        return;
+      }
+      if (importFile()) {
+        setImportFile(null);
+        setImportPassword("");
+        setImportError("");
         return;
       }
       if (isModalOpen()) {
@@ -1257,6 +767,8 @@ export default function App() {
     if (
       isModalOpen() ||
       credentialModal() ||
+      passwordModalOpen() ||
+      importFile() ||
       confirmRequest() ||
       attachmentPreview()
     ) {
@@ -1284,7 +796,8 @@ export default function App() {
     if (
       syncState() === "dirty" ||
       syncState() === "saving" ||
-      syncState() === "error"
+      syncState() === "error" ||
+      Boolean(maintenanceLabel())
     ) {
       event.preventDefault();
       event.returnValue = "";
@@ -1295,9 +808,21 @@ export default function App() {
     lastActivityAt = Date.now();
   };
 
+  const handleVisibilityChange = () => {
+    if (
+      document.visibilityState === "visible" &&
+      view() === "unlocked" &&
+      !maintenanceLabel() &&
+      Date.now() - lastActivityAt >= AUTO_LOCK_MS
+    ) {
+      void handleLock({ auto: true });
+    }
+  };
+
   onMount(() => {
     document.addEventListener("keydown", handleKeydown);
     document.addEventListener("paste", handlePaste);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("beforeunload", handleBeforeUnload);
     const activityEvents: (keyof WindowEventMap)[] = [
       "pointerdown",
@@ -1310,7 +835,11 @@ export default function App() {
       window.addEventListener(eventName, markActivity, { passive: true }),
     );
     autoLockTimer = window.setInterval(() => {
-      if (view() === "unlocked" && Date.now() - lastActivityAt >= AUTO_LOCK_MS) {
+      if (
+        view() === "unlocked" &&
+        !maintenanceLabel() &&
+        Date.now() - lastActivityAt >= AUTO_LOCK_MS
+      ) {
         void handleLock({ auto: true });
       }
     }, 30_000);
@@ -1318,6 +847,7 @@ export default function App() {
     onCleanup(() => {
       document.removeEventListener("keydown", handleKeydown);
       document.removeEventListener("paste", handlePaste);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("beforeunload", handleBeforeUnload);
       activityEvents.forEach((eventName) =>
         window.removeEventListener(eventName, markActivity),
@@ -1327,74 +857,86 @@ export default function App() {
   });
 
   onCleanup(() => {
-    if (copiedSecretResetTimer) window.clearTimeout(copiedSecretResetTimer);
-    if (copiedFieldResetTimer) window.clearTimeout(copiedFieldResetTimer);
-    if (clipboardClearTimer) window.clearTimeout(clipboardClearTimer);
     if (saveTimer) window.clearTimeout(saveTimer);
-    const preview = attachmentPreview();
-    if (preview) URL.revokeObjectURL(preview.url);
   });
 
   return (
     <div class="app" data-view={view()}>
       <div class="shell">
         <Show when={view() === "unlocked"}>
-          <header class="topbar">
-            <div class="brand brand-row">
-              <span class="brand-logo" aria-hidden="true" />
-              <div class="brand-text">
-                <span class="brand-mark">1Pass</span>
-                <span class="brand-subtitle">Personal vault</span>
-              </div>
-            </div>
-            <div class="topbar-actions">
-              <Show
-                when={syncState() === "error"}
-                fallback={
-                  <span
-                    class={`status-pill sync-pill ${
-                      syncState() === "idle" ? "" : "busy"
-                    }`}
-                    title={
-                      lastSaved()
-                        ? `Last saved ${new Date(lastSaved()!).toLocaleTimeString()}`
-                        : "All changes encrypted & synced"
-                    }
-                  >
-                    <Show when={syncState() === "idle"} fallback={"Saving…"}>
-                      Saved
-                    </Show>
-                  </span>
-                }
-              >
-                <button
-                  class="status-pill sync-pill error"
-                  type="button"
-                  title="Saving failed. Click to retry."
-                  onClick={() => void persistVault()}
-                >
-                  Sync failed — Retry
-                </button>
-              </Show>
-              <button
-                class="btn quiet"
-                type="button"
-                onClick={() => void handleExport()}
-              >
-                Export
-              </button>
-              <a class="btn quiet" href="/tax">
-                Tax
-              </a>
-              <button
-                class="btn ghost lock"
-                type="button"
-                onClick={() => void handleLock()}
-              >
-                Lock
-              </button>
-            </div>
-          </header>
+          <VaultWorkspace
+            vault={vault()}
+            activeSection={activeSection()}
+            syncState={syncState()}
+            syncError={error()}
+            lastSaved={lastSaved()}
+            maintenanceLabel={maintenanceLabel()}
+            query={query()}
+            filteredIdentities={filteredIdentities()}
+            filteredApiKeys={filteredApiKeys()}
+            selectedIdentity={selectedIdentity()}
+            selectedApiKey={selectedApiKey()}
+            isApiKeyVisible={isApiKeyVisible()}
+            copiedApiKeyId={copiedApiKeyId()}
+            copiedField={copiedField()}
+            attachmentBusyId={attachmentBusyId()}
+            uploadProgress={uploadProgress()}
+            attachmentError={attachmentError()}
+            onSectionChange={(section) => {
+              setActiveSection(section);
+              setQuery("");
+            }}
+            onQueryChange={setQuery}
+            onSearchRef={(element) => {
+              searchInputRef = element;
+            }}
+            onRetrySync={() => {
+              if (error().includes("another tab or device")) {
+                void handleLock({ auto: true });
+              } else {
+                void persistVault();
+              }
+            }}
+            onExport={() => void handleExport()}
+            onImportFile={handleChooseImportFile}
+            onChangePassword={openPasswordModal}
+            onLock={() => void handleLock()}
+            onNewIdentity={handleOpenIdentityModal}
+            onNewApiKey={handleOpenApiKeyModal}
+            onSelectIdentity={setSelectedIdentityId}
+            onSelectApiKey={setSelectedApiKeyId}
+            onToggleApiKeyVisible={() =>
+              setIsApiKeyVisible((current) => !current)
+            }
+            onCopyApiKey={(item) => void handleCopyApiKey(item)}
+            onEditApiKey={handleOpenEditApiKeyModal}
+            onDeleteApiKey={(item) => void handleDeleteApiKey(item)}
+            onCopyField={(value, key) => void handleCopyField(value, key)}
+            onCopySecret={(value, key) => void handleCopySecret(value, key)}
+            onEditIdentity={handleOpenEditIdentityModal}
+            onDeleteIdentity={(identity) =>
+              void handleDeleteIdentity(identity)
+            }
+            onAddFiles={(identityId, files) =>
+              void handleAddAttachments(identityId, files)
+            }
+            onOpenAttachment={(attachment) =>
+              void handleOpenAttachment(attachment)
+            }
+            onDownloadAttachment={(attachment) =>
+              void handleDownloadAttachment(attachment)
+            }
+            onDeleteAttachment={(identityId, attachment) =>
+              void handleDeleteAttachment(identityId, attachment)
+            }
+            onAddCredential={(identityId) =>
+              handleOpenCredentialModal(identityId, null)
+            }
+            onEditCredential={handleOpenCredentialModal}
+            onDeleteCredential={(identityId, credential) =>
+              void handleDeleteCredential(identityId, credential)
+            }
+          />
         </Show>
 
         <Show when={view() !== "unlocked"}>
@@ -1403,288 +945,16 @@ export default function App() {
             busy={busy()}
             busyLabel={busyLabel()}
             error={error()}
-            onSetup={(password) => void handleSetup(password)}
-            onUnlock={(password) => void handleUnlock(password)}
+            requiresBootstrap={requiresBootstrap()}
+            onSetup={(password, bootstrapSecret) =>
+              void handleSetup(password, bootstrapSecret)
+            }
+            onUnlock={(password, bootstrapSecret) =>
+              void handleUnlock(password, bootstrapSecret)
+            }
           />
         </Show>
 
-        <Show when={view() === "unlocked"}>
-          <section class="dashboard">
-            <aside class="vault-sidebar">
-              <nav class="nav-list">
-                <button
-                  class={`nav-item ${
-                    activeSection() === "identities" ? "active" : ""
-                  }`}
-                  type="button"
-                  onClick={() => {
-                    setActiveSection("identities");
-                    setQuery("");
-                  }}
-                >
-                  Identities
-                  <span>{vault().identities.length}</span>
-                </button>
-                <button
-                  class={`nav-item ${activeSection() === "apiKeys" ? "active" : ""}`}
-                  type="button"
-                  onClick={() => {
-                    setActiveSection("apiKeys");
-                    setQuery("");
-                  }}
-                >
-                  API Keys
-                  <span>{vault().apiKeys.length}</span>
-                </button>
-              </nav>
-            </aside>
-
-            <main class="main">
-              <div class="main-header">
-                <div />
-                <div class="action-row">
-                  <label class="search-field">
-                    <span class="sr-only">Search vault items</span>
-                    <input
-                      ref={searchInputRef}
-                      type="search"
-                      placeholder={
-                        activeSection() === "identities"
-                          ? "Search identities (⌘K)"
-                          : "Search API keys (⌘K)"
-                      }
-                      value={query()}
-                      onInput={(event) => setQuery(event.currentTarget.value)}
-                    />
-                  </label>
-                  <button
-                    class="btn primary icon"
-                    type="button"
-                    onClick={() => {
-                      if (activeSection() === "identities") {
-                        handleOpenIdentityModal();
-                      } else {
-                        handleOpenApiKeyModal();
-                      }
-                    }}
-                  >
-                    + New
-                  </button>
-                </div>
-              </div>
-
-              <div class="items-grid">
-                <div class="items-list">
-                  <div class="list-header">
-                    <span>
-                      {activeSection() === "identities"
-                        ? filteredIdentities().length
-                        : filteredApiKeys().length}{" "}
-                      {activeSection() === "identities"
-                        ? filteredIdentities().length === 1
-                          ? "identity"
-                          : "identities"
-                        : filteredApiKeys().length === 1
-                          ? "key"
-                          : "keys"}
-                    </span>
-                  </div>
-                  <div class="list-body">
-                    <Show
-                      when={activeSection() === "identities"}
-                      fallback={
-                        <Show
-                          when={filteredApiKeys().length > 0}
-                          fallback={
-                            <div class="empty-state">
-                              <p class="empty">
-                                {query().trim()
-                                  ? "No API keys match your search."
-                                  : "No API keys yet."}
-                              </p>
-                              <Show when={!query().trim()}>
-                                <button
-                                  class="btn ghost"
-                                  type="button"
-                                  onClick={handleOpenApiKeyModal}
-                                >
-                                  Add your first API key
-                                </button>
-                              </Show>
-                            </div>
-                          }
-                        >
-                          <For each={filteredApiKeys()}>
-                            {(item) => (
-                              <button
-                                class={`list-item ${
-                                  selectedApiKey()?.id === item.id ? "active" : ""
-                                }`}
-                                type="button"
-                                onClick={() => setSelectedApiKeyId(item.id)}
-                              >
-                                <div>
-                                  <strong>{item.label}</strong>
-                                  <span class="muted">
-                                    {item.environment || "No details"}
-                                  </span>
-                                </div>
-                              </button>
-                            )}
-                          </For>
-                        </Show>
-                      }
-                    >
-                      <Show
-                        when={filteredIdentities().length > 0}
-                        fallback={
-                          <div class="empty-state">
-                            <p class="empty">
-                              {query().trim()
-                                ? "No identities match your search."
-                                : "No identities yet."}
-                            </p>
-                            <Show when={!query().trim()}>
-                              <button
-                                class="btn ghost"
-                                type="button"
-                                onClick={handleOpenIdentityModal}
-                              >
-                                Create your first identity
-                              </button>
-                            </Show>
-                          </div>
-                        }
-                      >
-                        <For each={filteredIdentities()}>
-                          {(item) => (
-                            <button
-                              class={`list-item ${
-                                selectedIdentity()?.id === item.id ? "active" : ""
-                              }`}
-                              type="button"
-                              onClick={() => setSelectedIdentityId(item.id)}
-                            >
-                              <span class="avatar" aria-hidden="true">
-                                {identityInitials(item)}
-                              </span>
-                              <div>
-                                <strong>
-                                  {item.firstName} {item.lastName}
-                                </strong>
-                                <span class="muted">
-                                  {item.email || item.phone || "No contact details"}
-                                </span>
-                              </div>
-                              <span class="list-item-end">
-                                <Show when={item.credentials.length > 0}>
-                                  <span
-                                    class="count-badge"
-                                    title={`${item.credentials.length} password(s)`}
-                                  >
-                                    <KeyIcon />
-                                    {item.credentials.length}
-                                  </span>
-                                </Show>
-                                <Show when={item.attachments.length > 0}>
-                                  <span
-                                    class="count-badge"
-                                    title={`${item.attachments.length} file(s)`}
-                                  >
-                                    <PaperclipIcon />
-                                    {item.attachments.length}
-                                  </span>
-                                </Show>
-                              </span>
-                            </button>
-                          )}
-                        </For>
-                      </Show>
-                    </Show>
-                  </div>
-                </div>
-
-                <div class="detail-card">
-                  <Show
-                    when={activeSection() === "identities"}
-                    fallback={
-                      <Show
-                        when={selectedApiKey()}
-                        fallback={
-                          <div class="empty-detail">
-                            <p>Select an API key to view details.</p>
-                          </div>
-                        }
-                      >
-                        {(item) => (
-                          <ApiKeyDetail
-                            item={item()}
-                            isKeyVisible={isApiKeyVisible()}
-                            isCopied={copiedApiKeyId() === item().id}
-                            onToggleVisible={() =>
-                              setIsApiKeyVisible((current) => !current)
-                            }
-                            onCopyKey={() => void handleCopyApiKey(item())}
-                            onEdit={() => handleOpenEditApiKeyModal(item())}
-                            onDelete={() => void handleDeleteApiKey(item())}
-                          />
-                        )}
-                      </Show>
-                    }
-                  >
-                    <Show
-                      when={selectedIdentity()}
-                      fallback={
-                        <div class="empty-detail">
-                          <p>Select an identity to view details.</p>
-                        </div>
-                      }
-                    >
-                      {(identity) => (
-                        <IdentityDetail
-                          identity={identity()}
-                          copiedField={copiedField()}
-                          attachmentBusyId={attachmentBusyId()}
-                          uploadProgress={uploadProgress()}
-                          attachmentError={attachmentError()}
-                          onCopyField={(value, key) =>
-                            void handleCopyField(value, key)
-                          }
-                          onCopySecret={(value, key) =>
-                            void handleCopySecret(value, key)
-                          }
-                          onEdit={() => handleOpenEditIdentityModal(identity())}
-                          onDelete={() => void handleDeleteIdentity(identity())}
-                          onAddFiles={(files) =>
-                            void handleAddAttachments(identity().id, files)
-                          }
-                          onOpenAttachment={(attachment) =>
-                            void handleOpenAttachment(attachment)
-                          }
-                          onDownloadAttachment={(attachment) =>
-                            void handleDownloadAttachment(attachment)
-                          }
-                          onDeleteAttachment={(attachment) =>
-                            void handleDeleteAttachment(identity().id, attachment)
-                          }
-                          onAddCredential={() =>
-                            handleOpenCredentialModal(identity().id, null)
-                          }
-                          onEditCredential={(credential) =>
-                            handleOpenCredentialModal(identity().id, credential)
-                          }
-                          onDeleteCredential={(credential) =>
-                            void handleDeleteCredential(identity().id, credential)
-                          }
-                        />
-                      )}
-                    </Show>
-                  </Show>
-                </div>
-              </div>
-            </main>
-          </section>
-        </Show>
       </div>
 
       <Show when={isModalOpen()}>
@@ -1730,6 +1000,38 @@ export default function App() {
             }
             onSubmit={handleSaveCredential}
             onClose={handleCloseCredentialModal}
+          />
+        )}
+      </Show>
+
+      <Show when={passwordModalOpen() && !maintenanceLabel()}>
+        <ChangePasswordModal
+          draft={passwordDraft()}
+          error={passwordError()}
+          onChange={(patch) =>
+            setPasswordDraft((current) => ({ ...current, ...patch }))
+          }
+          onSubmit={() => void handleChangePassword()}
+          onClose={() => {
+            setPasswordModalOpen(false);
+            setPasswordError("");
+          }}
+        />
+      </Show>
+
+      <Show when={!maintenanceLabel() ? importFile() : null}>
+        {(file) => (
+          <ImportBackupModal
+            fileName={file().name}
+            password={importPassword()}
+            error={importError()}
+            onPasswordChange={setImportPassword}
+            onSubmit={() => void handleImportBackup()}
+            onClose={() => {
+              setImportFile(null);
+              setImportPassword("");
+              setImportError("");
+            }}
           />
         )}
       </Show>

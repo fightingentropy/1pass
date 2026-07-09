@@ -5,6 +5,7 @@ import {
   errorResponse,
   getDb,
   jsonResponse,
+  logError,
   optionsResponse,
 } from "./shared";
 import type { Env } from "./shared";
@@ -28,9 +29,9 @@ export async function onRequestGet({
     if (authFailure) return authFailure;
 
     const row = await db
-      .prepare("SELECT payload FROM vaults WHERE id = ?1")
+      .prepare("SELECT payload, revision FROM vaults WHERE id = ?1")
       .bind(DEFAULT_VAULT_ID)
-      .first<{ payload: string }>();
+      .first<{ payload: string; revision: number }>();
 
     if (!row?.payload) {
       return errorResponse("Vault not initialized.", 404, env);
@@ -40,13 +41,13 @@ export async function onRequestGet({
     try {
       payload = JSON.parse(row.payload);
     } catch (parseError) {
-      console.error("Vault payload parse error", parseError);
+      logError("Vault payload parse failed", parseError);
       return errorResponse("Vault data is corrupted.", 500, env);
     }
 
-    return jsonResponse({ payload }, env);
+    return jsonResponse({ payload, revision: row.revision }, env);
   } catch (error) {
-    console.error("Vault load error", error);
+    logError("Vault load failed", error);
     return errorResponse("Unable to load vault.", 500, env);
   }
 }

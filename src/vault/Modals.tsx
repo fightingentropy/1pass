@@ -1,7 +1,8 @@
-import { createSignal, onMount, Show } from "solid-js";
+import { createSignal, createUniqueId, onMount, Show } from "solid-js";
 import type { ApiKeyDraft, CredentialDraft, IdentityDraft } from "./types";
 import { generatePassword } from "./types";
 import { CloseIcon } from "./icons";
+import { trapFocus } from "./focus";
 
 type ModalShellProps = {
   title: string;
@@ -13,13 +14,23 @@ type ModalShellProps = {
   children: any;
 };
 
-function ModalShell(props: ModalShellProps) {
+export function ModalShell(props: ModalShellProps) {
+  const titleId = createUniqueId();
+  let modalRef: HTMLDivElement | undefined;
   return (
     <div class="modal-backdrop" onClick={props.onClose}>
-      <div class="modal" onClick={(event) => event.stopPropagation()}>
+      <div
+        ref={modalRef}
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onKeyDown={(event) => trapFocus(event, modalRef)}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div class="modal-header">
           <div>
-            <h2>{props.title}</h2>
+            <h2 id={titleId}>{props.title}</h2>
             <p class="muted">{props.description}</p>
           </div>
           <button
@@ -342,7 +353,6 @@ export function CredentialModal(props: CredentialModalProps) {
             <button
               class="password-reveal"
               type="button"
-              tabindex={-1}
               onClick={() => setShowPassword((current) => !current)}
             >
               {showPassword() ? "Hide" : "Show"}

@@ -48,20 +48,6 @@ export default function TaxCalculator() {
           currentScenario().totalTaxAndNI - contribution().governmentTopUp,
         ) / effectiveTaxRateBase()
       : 0;
-  const cisCreditOnPersonalAllowance = () =>
-    Math.min(
-      currentScenario().effectivePA,
-      currentScenario().cisDeductionBase,
-    ) * input().cisDeductionRate;
-  const cisCreditOnExpenses = () =>
-    Math.min(
-      currentScenario().businessExpenses,
-      Math.max(
-        0,
-        currentScenario().cisDeductionBase -
-          currentScenario().effectivePA,
-      ),
-    ) * input().cisDeductionRate;
   const refundBeforeNI = () =>
     currentScenario().cisDeducted - currentScenario().incomeTax.total;
   const netCashTooltip = () =>
@@ -77,7 +63,7 @@ export default function TaxCalculator() {
     <div class="tax-page">
       <header class="tax-header">
         <a class="tax-back" href="/">← Back to vault</a>
-        <h1>Employment tax calculator</h1>
+        <h1>CIS tax calculator</h1>
         <p class="subtitle">2026/27 tax year</p>
       </header>
 
@@ -105,6 +91,24 @@ export default function TaxCalculator() {
               value={input().businessExpenses}
               onInput={(e) =>
                 update("businessExpenses", FALLBACK(e.currentTarget.value, 0))
+              }
+            />
+          </label>
+
+          <label class="field">
+            <span class="field-label">
+              Materials and VAT excluded from CIS deductions
+            </span>
+            <input
+              type="number"
+              min={0}
+              step={100}
+              value={input().cisDeductionExclusions}
+              onInput={(e) =>
+                update(
+                  "cisDeductionExclusions",
+                  FALLBACK(e.currentTarget.value, 0),
+                )
               }
             />
           </label>
@@ -154,7 +158,7 @@ export default function TaxCalculator() {
                 <dd>{formatCurrency(currentScenario().incomeTax.total)}</dd>
               </div>
               <div>
-                <dt>National Insurance due</dt>
+                <dt>Class 4 National Insurance due</dt>
                 <dd>{formatCurrency(currentScenario().class4NI)}</dd>
               </div>
               <div class="total">
@@ -170,14 +174,6 @@ export default function TaxCalculator() {
               <div>
                 <dt>CIS deducted at source</dt>
                 <dd>{formatCurrency(currentScenario().cisDeducted)}</dd>
-              </div>
-              <div>
-                <dt>20% withheld on Personal Allowance</dt>
-                <dd>{formatCurrency(cisCreditOnPersonalAllowance())}</dd>
-              </div>
-              <div>
-                <dt>20% withheld on expenses</dt>
-                <dd>{formatCurrency(cisCreditOnExpenses())}</dd>
               </div>
               <div>
                 <dt>Refund before Class 4 NI</dt>
@@ -212,6 +208,13 @@ export default function TaxCalculator() {
 
           <div class="tax-card highlight">
             <h2>Pension contribution</h2>
+            {contribution().reliefLimited ? (
+              <p class="tax-warning" role="status">
+                Tax-relieved personal contributions are capped here at{" "}
+                {formatCurrency(contribution().reliefLimit)} gross, based on the
+                relevant earnings entered.
+              </p>
+            ) : null}
             <dl class="tax-defs">
               {contribution().grossContribution <= 0 ? (
                 <>
@@ -278,6 +281,11 @@ export default function TaxCalculator() {
               )}
             </dl>
           </div>
+          <p class="tax-disclaimer">
+            Estimate only. It does not include every Self Assessment adjustment,
+            other income, student loans, or payments on account. Check the result
+            against HMRC guidance or an accountant before filing.
+          </p>
         </section>
       </div>
     </div>

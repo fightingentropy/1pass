@@ -12,6 +12,8 @@ yarn-error.log*
 
 # Local env files
 .env
+.dev.vars*
+!.dev.vars.example
 
 # Misc
 .DS_Store

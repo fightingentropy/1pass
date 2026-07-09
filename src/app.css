@@ -475,6 +475,28 @@ body::after {
     gap: 24px;
 }
 
+.dashboard.maintenance-active {
+    pointer-events: none;
+    opacity: 0.72;
+}
+
+.maintenance-checkbox {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.maintenance-checkbox input {
+    width: auto;
+}
+
+.maintenance-warning {
+    margin: 0;
+    color: var(--danger);
+    line-height: 1.5;
+}
+
 .sidebar {
     display: flex;
     flex-direction: column;
@@ -1336,7 +1358,7 @@ body::after {
 
 .tax-inputs {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 16px 20px;
     min-width: 0;
 }
@@ -1448,6 +1470,28 @@ body::after {
     font-size: 13px;
     line-height: 1.35;
     text-align: left;
+}
+
+.tax-warning,
+.tax-disclaimer {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.tax-warning {
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 184, 77, 0.28);
+    border-radius: 10px;
+    background: rgba(255, 184, 77, 0.07);
+    color: #ffd49a;
+}
+
+.tax-disclaimer {
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid var(--border);
 }
 
 .tax-metric-grid {

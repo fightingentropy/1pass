@@ -1,7 +1,8 @@
-import { Show } from "solid-js";
+import { createUniqueId, onMount, Show } from "solid-js";
 import type { AttachmentPreviewState } from "./types";
 import { formatBytes, isImageAttachment, triggerBlobDownload } from "./types";
 import { CloseIcon } from "./icons";
+import { trapFocus } from "./focus";
 
 type AttachmentPreviewOverlayProps = {
   preview: AttachmentPreviewState;
@@ -11,12 +12,25 @@ type AttachmentPreviewOverlayProps = {
 export default function AttachmentPreviewOverlay(
   props: AttachmentPreviewOverlayProps,
 ) {
+  const titleId = createUniqueId();
+  let dialogRef: HTMLDivElement | undefined;
+  let closeButtonRef: HTMLButtonElement | undefined;
+  onMount(() => closeButtonRef?.focus());
+
   return (
     <div class="modal-backdrop preview-backdrop" onClick={props.onClose}>
-      <div class="preview-shell" onClick={(event) => event.stopPropagation()}>
+      <div
+        ref={dialogRef}
+        class="preview-shell"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onKeyDown={(event) => trapFocus(event, dialogRef)}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div class="preview-header">
           <div class="preview-title">
-            <strong>{props.preview.attachment.name}</strong>
+            <strong id={titleId}>{props.preview.attachment.name}</strong>
             <span class="attachment-size">
               {formatBytes(props.preview.attachment.size)}
             </span>
@@ -35,6 +49,7 @@ export default function AttachmentPreviewOverlay(
               Download
             </button>
             <button
+              ref={closeButtonRef}
               class="icon-button icon-only"
               type="button"
               aria-label="Close"

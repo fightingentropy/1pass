@@ -1,0 +1,13 @@
+{
+  "extends": "../tsconfig.worker.json",
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "skipLibCheck": true,
+    "types": [
+      "@cloudflare/vitest-pool-workers/types",
+      "@cloudflare/workers-types",
+      "vitest/globals"
+    ]
+  },
+  "include": ["./**/*.ts", "../functions/**/*.ts", "../worker-configuration.d.ts"]
+}

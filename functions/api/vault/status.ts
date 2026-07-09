@@ -4,6 +4,7 @@ import {
   errorResponse,
   getDb,
   jsonResponse,
+  logError,
   optionsResponse,
 } from "./shared";
 import type { Env } from "./shared";
@@ -23,7 +24,7 @@ export async function onRequestGet({ env }: { env: Env }) {
 
     return jsonResponse({ exists: Boolean(row) }, env);
   } catch (error) {
-    console.error("Vault status error", error);
+    logError("Vault status check failed", error);
     return errorResponse("Unable to check vault status.", 500, env);
   }
 }

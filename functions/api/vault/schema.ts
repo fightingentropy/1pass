@@ -79,6 +79,7 @@ export type VaultEncryptedPayload = {
 
 export type VaultMeta = {
   exists: boolean;
+  requiresBootstrap?: boolean;
   version?: number;
   kdf?: VaultEncryptedPayload["kdf"];
 };
@@ -91,6 +92,7 @@ export const DEFAULT_VAULT_PAYLOAD: VaultPayload = {
 export const VAULT_KDF_ITERATIONS = 600_000;
 
 export const VAULT_AUTH_HEADER = "x-vault-auth";
+export const VAULT_BOOTSTRAP_HEADER = "x-vault-bootstrap";
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;

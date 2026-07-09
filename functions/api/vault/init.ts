@@ -1,10 +1,13 @@
+import { isVaultEncryptedPayload } from "./schema";
 import {
   DEFAULT_VAULT_ID,
   VAULT_AUTH_HEADER,
+  checkBootstrapSecret,
   ensureVaultTable,
   errorResponse,
   getDb,
   jsonResponse,
+  logError,
   optionsResponse,
   sha256Hex,
 } from "./shared";
@@ -22,13 +25,20 @@ export async function onRequestPost({
   env: Env;
 }) {
   try {
-    const body = await request.json().catch(() => null);
-    if (!body || typeof body.payload !== "object" || body.payload === null) {
+    const bootstrapFailure = await checkBootstrapSecret(request, env);
+    if (bootstrapFailure) return bootstrapFailure;
+
+    const body: unknown = await request.json().catch(() => null);
+    const payload =
+      body && typeof body === "object" && "payload" in body
+        ? body.payload
+        : null;
+    if (!isVaultEncryptedPayload(payload) || payload.version !== 2) {
       return errorResponse("Invalid payload.", 400, env);
     }
 
     // D1 rejects values over 2MB with an opaque error; fail clearly instead.
-    const payloadJson = JSON.stringify(body.payload);
+    const payloadJson = JSON.stringify(payload);
     if (payloadJson.length > 1_900_000) {
       return errorResponse("Vault payload too large.", 413, env);
     }
@@ -40,18 +50,9 @@ export async function onRequestPost({
 
     const db = getDb(env);
     await ensureVaultTable(db);
-    const existing = await db
-      .prepare("SELECT id FROM vaults WHERE id = ?1")
-      .bind(DEFAULT_VAULT_ID)
-      .first();
-
-    if (existing) {
-      return errorResponse("Vault already exists.", 409, env);
-    }
-
-    await db
+    const inserted = await db
       .prepare(
-        "INSERT INTO vaults (id, payload, updated_at, auth_hash) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT OR IGNORE INTO vaults (id, payload, updated_at, auth_hash, revision) VALUES (?1, ?2, ?3, ?4, 0)",
       )
       .bind(
         DEFAULT_VAULT_ID,
@@ -61,9 +62,13 @@ export async function onRequestPost({
       )
       .run();
 
-    return jsonResponse({ ok: true }, env);
+    if (inserted.meta.changes !== 1) {
+      return errorResponse("Vault already exists.", 409, env);
+    }
+
+    return jsonResponse({ ok: true, revision: 0 }, env);
   } catch (error) {
-    console.error("Vault init error", error);
+    logError("Vault init failed", error);
     return errorResponse("Unable to initialize vault.", 500, env);
   }
 }
