@@ -85,8 +85,8 @@ const SAMPLE_PAYLOAD: VaultPayload = {
   apiKeys: [
     {
       id: "key-1",
-      label: "provider",
-      service: "provider",
+      label: "Example Provider",
+      service: "example-provider",
       key: "sk-test-not-real",
       environment: "prod",
       notes: "",
