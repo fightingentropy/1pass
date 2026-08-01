@@ -34,7 +34,6 @@ Open [http://localhost:5173](http://localhost:5173) to access the vault.
 - **Auto-lock** — the vault locks after 15 minutes of inactivity
 - **Offline auto-lock recovery** — if syncing fails at lock time, an encrypted recovery copy is kept in that browser and offered on the next unlock
 - **Legacy migration** — plaintext (v0), v1, and v2 vaults are upgraded to the v3 scheme on unlock, including re-encryption of all attachment chunks (idempotent if interrupted)
-- **Separate tax origin** — a static UK self-assessment calculator (CIS/self-employed/employed modes, pension contributions, HICBC, annual allowance carry-forward) built and deployed independently from the vault
 
 ## Security
 
@@ -105,20 +104,6 @@ indexes/counts, request timing, client network metadata, and access frequency.
 The public `/api/vault/meta` endpoint reveals the envelope version and KDF salt
 and work factor by design. Do not treat this deployment as traffic-analysis
 resistant or multi-tenant isolation.
-
-The tax calculator is built into `tax-site/dist` and deployed as the separate
-`1pass-tax` Pages project. Its bundle contains no vault UI, API client, Pages
-Functions, D1/R2 bindings or vault authentication strings, and its CSP denies
-all network connections. The vault links across origins using
-`VITE_TAX_ORIGIN`; the tax site links back with `VITE_VAULT_ORIGIN`.
-
-Deploy and verify the two projects independently:
-
-```bash
-bun run build
-bun run deploy:tax
-bun run deploy:vault
-```
 
 ## Verification
 

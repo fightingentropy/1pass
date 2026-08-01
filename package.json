@@ -5,25 +5,19 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "bun run build:vault && bun run build:tax && bun run check:origin-isolation",
-    "build:vault": "vite build",
-    "build:tax": "vite build --config tax-site/vite.config.ts",
+    "build": "vite build",
     "build:local": "VITE_API_BASE=' ' vite build",
     "preview": "vite preview",
-    "test": "bun run test:crypto && bun run test:maintenance && bun run test:tax && bun run test:worker",
+    "test": "bun run test:crypto && bun run test:maintenance && bun run test:worker",
     "test:crypto": "bun run src/vaultCrypto.sanity.ts",
     "test:maintenance": "bun run src/vaultMaintenance.sanity.ts",
-    "test:tax": "bun run src/tax/calculator.sanity.ts",
     "test:worker": "BOOTSTRAP_SECRET=test-bootstrap-secret vitest run",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json && tsc -p test/tsconfig.json",
     "check": "bun run typecheck && bun run test && bun run build",
-    "check:origin-isolation": "bun run scripts/check-origin-isolation.ts",
     "cf:types": "wrangler types worker-configuration.d.ts --env production --env-file /dev/null --env-interface CloudflareEnv --include-runtime false",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "pages-dev": "bun run build:local && wrangler pages dev",
-    "pages-dev:tax": "bun run build:tax && cd tax-site && wrangler pages dev dist --port 8789",
-    "deploy:vault": "wrangler pages deploy dist --project-name 1pass --branch main",
-    "deploy:tax": "cd tax-site && wrangler pages deploy dist --project-name 1pass-tax --branch main"
+    "deploy:vault": "wrangler pages deploy dist --project-name 1pass --branch main"
   },
   "dependencies": {
     "solid-js": "1.9.14"
