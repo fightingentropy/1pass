@@ -9,6 +9,7 @@ import {
   jsonResponse,
   logError,
   optionsResponse,
+  readBoundedJson,
   sha256Hex,
 } from "./shared";
 import type { Env } from "./shared";
@@ -28,12 +29,21 @@ export async function onRequestPost({
     const bootstrapFailure = await checkBootstrapSecret(request, env);
     if (bootstrapFailure) return bootstrapFailure;
 
-    const body: unknown = await request.json().catch(() => null);
+    const authToken = request.headers.get(VAULT_AUTH_HEADER) ?? "";
+    if (authToken.length < 32 || authToken.length > 256) {
+      return errorResponse("Missing or invalid auth token.", 400, env);
+    }
+
+    const parsedBody = await readBoundedJson(request, 1_950_000);
+    if (!parsedBody.ok) {
+      return errorResponse(parsedBody.error, parsedBody.status, env);
+    }
+    const body = parsedBody.value;
     const payload =
       body && typeof body === "object" && "payload" in body
         ? body.payload
         : null;
-    if (!isVaultEncryptedPayload(payload) || payload.version !== 2) {
+    if (!isVaultEncryptedPayload(payload) || payload.version < 2) {
       return errorResponse("Invalid payload.", 400, env);
     }
 
@@ -41,11 +51,6 @@ export async function onRequestPost({
     const payloadJson = JSON.stringify(payload);
     if (payloadJson.length > 1_900_000) {
       return errorResponse("Vault payload too large.", 413, env);
-    }
-
-    const authToken = request.headers.get(VAULT_AUTH_HEADER) ?? "";
-    if (!authToken || authToken.length > 256) {
-      return errorResponse("Missing auth token.", 400, env);
     }
 
     const db = getDb(env);

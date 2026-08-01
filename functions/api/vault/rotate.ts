@@ -9,6 +9,7 @@ import {
   jsonResponse,
   logError,
   optionsResponse,
+  readBoundedJson,
   sha256Hex,
 } from "./shared";
 import type { Env } from "./shared";
@@ -25,7 +26,16 @@ export async function onRequestPost({
   env: Env;
 }) {
   try {
-    const body: unknown = await request.json().catch(() => null);
+    const db = getDb(env);
+    await ensureVaultTable(db);
+    const authFailure = await checkVaultAuth(request, db, env);
+    if (authFailure) return authFailure;
+
+    const parsedBody = await readBoundedJson(request, 1_950_000);
+    if (!parsedBody.ok) {
+      return errorResponse(parsedBody.error, parsedBody.status, env);
+    }
+    const body = parsedBody.value;
     const payload =
       body && typeof body === "object" && "payload" in body
         ? body.payload
@@ -39,7 +49,7 @@ export async function onRequestPost({
         ? body.newAuthToken
         : null;
 
-    if (!isVaultEncryptedPayload(payload) || payload.version !== 2) {
+    if (!isVaultEncryptedPayload(payload) || payload.version < 2) {
       return errorResponse("Invalid payload.", 400, env);
     }
     if (
@@ -61,11 +71,6 @@ export async function onRequestPost({
     if (payloadJson.length > 1_900_000) {
       return errorResponse("Vault payload too large.", 413, env);
     }
-
-    const db = getDb(env);
-    await ensureVaultTable(db);
-    const authFailure = await checkVaultAuth(request, db, env);
-    if (authFailure) return authFailure;
 
     const existing = await db
       .prepare("SELECT revision FROM vaults WHERE id = ?1")

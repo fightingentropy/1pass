@@ -1,19 +1,23 @@
-// Sanity check — exercises the vault crypto envelope (v1 legacy + v2 HKDF)
+// Sanity check — exercises the vault crypto envelope (v1 legacy + v2/v3 HKDF)
 // and prints PASS/FAIL per check. Run with:
 //   bun run src/vaultCrypto.sanity.ts
 import {
   createVaultSession,
+  createV3AttachmentManifest,
   restoreVaultSession,
   encryptVaultPayload,
   decryptVaultPayload,
   encryptBytes,
   decryptBytes,
+  encryptedChunkDigest,
   isEncryptedChunk,
+  verifyV3AttachmentManifest,
 } from "./vaultCrypto";
 import type {
   VaultEncryptedPayload,
   VaultPayload,
 } from "../functions/api/vault/schema";
+import { isVaultEncryptedPayload } from "../functions/api/vault/schema";
 
 let allPass = true;
 
@@ -25,7 +29,11 @@ function check(label: string, ok: boolean, detail = "") {
 
 function checkEq<T>(label: string, actual: T, expected: T) {
   const ok = actual === expected;
-  check(label, ok, ok ? "" : `got ${String(actual)}, expected ${String(expected)}`);
+  check(
+    label,
+    ok,
+    ok ? "" : `got ${String(actual)}, expected ${String(expected)}`,
+  );
 }
 
 async function rejects(fn: () => Promise<unknown>): Promise<boolean> {
@@ -43,8 +51,8 @@ function randomSaltBase64(): string {
   return btoa(String.fromCharCode(...bytes));
 }
 
-// Fast KDF params for tests — restoreVaultSession accepts arbitrary iterations.
-const TEST_ITERATIONS = 1000;
+// Lower production bound keeps the compatibility cases reasonably fast.
+const TEST_ITERATIONS = 100_000;
 
 function testKdf(salt = randomSaltBase64()): VaultEncryptedPayload["kdf"] {
   return { name: "PBKDF2", hash: "SHA-256", iterations: TEST_ITERATIONS, salt };
@@ -100,15 +108,17 @@ const SAMPLE_PAYLOAD: VaultPayload = {
 async function case1() {
   console.log("\nCase 1: createVaultSession -> encrypt -> decrypt round-trip");
   const session = await createVaultSession("correct horse battery staple");
-  checkEq("session version", session.version, 2);
+  checkEq("session version", session.version, 3);
   checkEq("kdf iterations", session.kdf.iterations, 600_000);
   check("kdf salt present", session.kdf.salt.length > 0);
 
   const encrypted = await encryptVaultPayload(SAMPLE_PAYLOAD, session);
-  checkEq("envelope version", encrypted.version, 2);
+  checkEq("envelope version", encrypted.version, 3);
   checkEq("envelope format", encrypted.format, "aes-gcm");
-  check("ciphertext differs from plaintext JSON",
-    encrypted.ciphertext !== JSON.stringify(SAMPLE_PAYLOAD));
+  check(
+    "ciphertext differs from plaintext JSON",
+    encrypted.ciphertext !== JSON.stringify(SAMPLE_PAYLOAD),
+  );
 
   const decrypted = await decryptVaultPayload(encrypted, session);
   checkEq(
@@ -128,13 +138,19 @@ async function case2() {
 
   const bad = await restoreVaultSession("wrong-password", { version: 2, kdf });
   check("wrong-password session derives", bad.version === 2);
-  check("authToken differs for wrong password", bad.authToken !== good.authToken);
+  check(
+    "authToken differs for wrong password",
+    bad.authToken !== good.authToken,
+  );
   check(
     "decryptVaultPayload rejects with wrong password",
     await rejects(() => decryptVaultPayload(encrypted, bad)),
   );
 
-  const rightAgain = await restoreVaultSession("right-password", { version: 2, kdf });
+  const rightAgain = await restoreVaultSession("right-password", {
+    version: 2,
+    kdf,
+  });
   const decrypted = await decryptVaultPayload(encrypted, rightAgain);
   checkEq(
     "correct password still decrypts",
@@ -155,7 +171,10 @@ async function case3() {
     version: 2,
     kdf: testKdf(),
   });
-  check("different salt -> different authToken", a.authToken !== otherSalt.authToken);
+  check(
+    "different salt -> different authToken",
+    a.authToken !== otherSalt.authToken,
+  );
 
   checkEq("authToken is 44 chars (32 bytes base64)", a.authToken.length, 44);
   check(
@@ -194,17 +213,18 @@ async function case4() {
 async function case5() {
   console.log("\nCase 5: encryptBytes/decryptBytes chunk round-trip");
   const session = await restoreVaultSession("chunk-password", {
-    version: 2,
+    version: 3,
     kdf: testKdf(),
   });
+  const context = { fileId: "file-1", chunkIndex: 0, totalChunks: 1 };
 
   const original = new Uint8Array(100 * 1024);
   crypto.getRandomValues(original);
 
-  const chunk = await encryptBytes(original, session);
+  const chunk = await encryptBytes(original, session, context);
   check("chunk shape passes isEncryptedChunk", isEncryptedChunk(chunk));
 
-  const roundTripped = await decryptBytes(chunk, session);
+  const roundTripped = await decryptBytes(chunk, session, context);
   checkEq("decrypted length", roundTripped.length, original.length);
   let equal = true;
   for (let i = 0; i < original.length; i++) {
@@ -215,6 +235,54 @@ async function case5() {
   }
   check("100KB random bytes round-trip byte-for-byte", equal);
 
+  const manifest = await createV3AttachmentManifest(
+    session,
+    context.fileId,
+    [await encryptedChunkDigest(chunk)],
+    [original.length],
+  );
+  const attachment = {
+    id: context.fileId,
+    name: "test.bin",
+    mimeType: "application/octet-stream",
+    size: original.length,
+    thumb: "",
+    createdAt: 1,
+    ...manifest,
+  };
+  check(
+    "manifest authenticates for its file",
+    await verifyV3AttachmentManifest(attachment, session),
+  );
+  check(
+    "manifest cannot be replayed for another file",
+    !(await verifyV3AttachmentManifest(
+      { ...attachment, id: "file-2" },
+      session,
+    )),
+  );
+
+  const replacement = await encryptBytes(
+    new TextEncoder().encode("replacement file version"),
+    session,
+    context,
+  );
+  const replacementHash = await encryptedChunkDigest(replacement);
+  const replacementManifest = await createV3AttachmentManifest(
+    session,
+    context.fileId,
+    [replacementHash],
+    ["replacement file version".length],
+  );
+  check(
+    "previous file version is rejected by the current manifest",
+    (await encryptedChunkDigest(chunk)) !== replacementHash &&
+      (await verifyV3AttachmentManifest(
+        { ...attachment, ...replacementManifest },
+        session,
+      )),
+  );
+
   // Flip one ciphertext character (middle of the string, away from padding).
   const mid = Math.floor(chunk.ciphertext.length / 2);
   const flipped =
@@ -224,7 +292,58 @@ async function case5() {
   check("tampered ciphertext actually differs", flipped !== chunk.ciphertext);
   check(
     "decryptBytes rejects tampered ciphertext",
-    await rejects(() => decryptBytes({ iv: chunk.iv, ciphertext: flipped }, session)),
+    await rejects(() =>
+      decryptBytes({ ...chunk, ciphertext: flipped }, session, context),
+    ),
+  );
+  check(
+    "chunk rejects a different file id",
+    await rejects(() =>
+      decryptBytes(chunk, session, { ...context, fileId: "file-2" }),
+    ),
+  );
+  check(
+    "chunk rejects a different position",
+    await rejects(() =>
+      decryptBytes(chunk, session, {
+        fileId: context.fileId,
+        chunkIndex: 1,
+        totalChunks: 2,
+      }),
+    ),
+  );
+}
+
+async function case6() {
+  console.log("\nCase 6: hostile envelope parameters are rejected");
+  const kdf = testKdf();
+  check(
+    "too-cheap KDF is rejected before derivation",
+    await rejects(() =>
+      restoreVaultSession("password", {
+        version: 3,
+        kdf: { ...kdf, iterations: 99_999 },
+      }),
+    ),
+  );
+  check(
+    "excessive KDF is rejected before derivation",
+    await rejects(() =>
+      restoreVaultSession("password", {
+        version: 3,
+        kdf: { ...kdf, iterations: 2_000_001 },
+      }),
+    ),
+  );
+  check(
+    "short salt is rejected",
+    !isVaultEncryptedPayload({
+      version: 3,
+      format: "aes-gcm",
+      kdf: { ...kdf, salt: "c2FsdA==" },
+      iv: "AAAAAAAAAAAAAAAA",
+      ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==",
+    }),
   );
 }
 
@@ -234,8 +353,11 @@ async function main() {
   await case3();
   await case4();
   await case5();
+  await case6();
 
-  console.log(allPass ? "\nAll cases passed." : "\nSome checks failed — see above.");
+  console.log(
+    allPass ? "\nAll cases passed." : "\nSome checks failed — see above.",
+  );
   if (!allPass) {
     throw new Error("Sanity check failed");
   }

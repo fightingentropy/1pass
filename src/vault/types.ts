@@ -145,6 +145,24 @@ function normalizeAttachment(raw: unknown): VaultAttachment | null {
   if (!raw || typeof raw !== "object") return null;
   const partial = raw as Partial<VaultAttachment>;
   if (typeof partial.id !== "string" || partial.id.length === 0) return null;
+  const chunks =
+    typeof partial.chunks === "number" && partial.chunks > 0
+      ? Math.min(64, Math.floor(partial.chunks))
+      : 1;
+  const hasV3Manifest =
+    partial.envelopeVersion === 3 &&
+    Array.isArray(partial.chunkHashes) &&
+    partial.chunkHashes.length === chunks &&
+    partial.chunkHashes.every(
+      (hash) => typeof hash === "string" && /^[a-f0-9]{64}$/.test(hash),
+    ) &&
+    Array.isArray(partial.chunkSizes) &&
+    partial.chunkSizes.length === chunks &&
+    partial.chunkSizes.every(
+      (size) => Number.isInteger(size) && size >= 0 && size <= 1_048_576,
+    ) &&
+    typeof partial.manifestMac === "string" &&
+    /^[A-Za-z0-9+/]{43}=$/.test(partial.manifestMac);
   return {
     id: partial.id,
     name:
@@ -156,13 +174,18 @@ function normalizeAttachment(raw: unknown): VaultAttachment | null {
         ? partial.mimeType
         : "application/octet-stream",
     size: typeof partial.size === "number" && partial.size > 0 ? partial.size : 0,
-    chunks:
-      typeof partial.chunks === "number" && partial.chunks > 0
-        ? Math.min(64, Math.floor(partial.chunks))
-        : 1,
+    chunks,
     thumb: typeof partial.thumb === "string" ? partial.thumb : "",
     createdAt:
       typeof partial.createdAt === "number" ? partial.createdAt : Date.now(),
+    ...(partial.envelopeVersion === 3
+      ? {
+          envelopeVersion: 3 as const,
+          chunkHashes: hasV3Manifest ? partial.chunkHashes : [],
+          chunkSizes: hasV3Manifest ? partial.chunkSizes : [],
+          manifestMac: hasV3Manifest ? partial.manifestMac : "",
+        }
+      : {}),
   };
 }
 

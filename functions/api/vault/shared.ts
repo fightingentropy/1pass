@@ -10,6 +10,8 @@ export const VAULT_AUTH_HEADER = "x-vault-auth";
 export const VAULT_HISTORY_LIMIT = 10;
 export const MAX_FILE_CHUNK_INDEX = 63;
 export const MAX_FILE_CHUNK_JSON_BYTES = 1_600_256;
+export const STAGED_UPLOAD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+export const STAGED_UPLOAD_GC_LIMIT = 8;
 const AUTH_FAILURE_LIMIT = 60;
 const AUTH_FAILURE_WINDOW_MS = 60_000;
 
@@ -23,7 +25,11 @@ export function getCorsHeaders(env?: Env): Record<string, string> {
   };
 }
 
-export function jsonResponse(data: unknown, env?: Env, init: ResponseInit = {}) {
+export function jsonResponse(
+  data: unknown,
+  env?: Env,
+  init: ResponseInit = {},
+) {
   return new Response(JSON.stringify(data), {
     ...init,
     headers: {
@@ -37,6 +43,60 @@ export function jsonResponse(data: unknown, env?: Env, init: ResponseInit = {}) 
 
 export function errorResponse(message: string, status = 400, env?: Env) {
   return jsonResponse({ error: message }, env, { status });
+}
+
+export async function readBoundedJson(
+  request: Request,
+  maxBytes: number,
+): Promise<
+  | { ok: true; value: unknown }
+  | { ok: false; status: 400 | 413 | 415; error: string }
+> {
+  const contentType = request.headers
+    .get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim();
+  if (contentType !== "application/json") {
+    return { ok: false, status: 415, error: "Expected a JSON request body." };
+  }
+  const declaredLength = request.headers.get("content-length");
+  if (declaredLength) {
+    const parsed = Number(declaredLength);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      return { ok: false, status: 400, error: "Invalid Content-Length." };
+    }
+    if (parsed > maxBytes) {
+      return { ok: false, status: 413, error: "Request body is too large." };
+    }
+  }
+  if (!request.body) {
+    return { ok: false, status: 400, error: "Missing JSON request body." };
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      return { ok: false, status: 413, error: "Request body is too large." };
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return { ok: true, value: JSON.parse(new TextDecoder().decode(bytes)) };
+  } catch {
+    return { ok: false, status: 400, error: "Invalid JSON request body." };
+  }
 }
 
 export function logError(message: string, error: unknown) {
@@ -79,14 +139,21 @@ export function filePrefix(fileId: string) {
   return `vaults/${DEFAULT_VAULT_ID}/files/${fileId}/`;
 }
 
-export async function deleteFileObjects(bucket: Env["VAULT_FILES"], fileId: string) {
+export function stagedUploadPrefix(uploadId: string) {
+  return `vaults/${DEFAULT_VAULT_ID}/staging/${uploadId}/`;
+}
+
+export function stagedChunkKey(uploadId: string, chunkIndex: number) {
+  return `${stagedUploadPrefix(uploadId)}${chunkIndex}.json`;
+}
+
+export async function deleteObjectPrefix(
+  bucket: Env["VAULT_FILES"],
+  prefix: string,
+) {
   let cursor: string | undefined;
   do {
-    const listed = await bucket.list({
-      prefix: filePrefix(fileId),
-      limit: 1000,
-      cursor,
-    });
+    const listed = await bucket.list({ prefix, limit: 1000, cursor });
     if (listed.objects.length > 0) {
       await bucket.delete(listed.objects.map((object) => object.key));
     }
@@ -94,52 +161,96 @@ export async function deleteFileObjects(bucket: Env["VAULT_FILES"], fileId: stri
   } while (cursor);
 }
 
+export async function deleteFileObjects(
+  bucket: Env["VAULT_FILES"],
+  fileId: string,
+) {
+  await deleteObjectPrefix(bucket, filePrefix(fileId));
+}
+
 export async function ensureVaultTable(db: Env["DB"]) {
-  await db
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS vaults (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL, auth_hash TEXT, revision INTEGER NOT NULL DEFAULT 0)",
-    )
-    .run();
-
-  // Older deployments predate the auth_hash column; probe and add it lazily.
-  try {
-    await db.prepare("SELECT auth_hash FROM vaults LIMIT 1").first();
-  } catch {
-    await db.prepare("ALTER TABLE vaults ADD COLUMN auth_hash TEXT").run();
-  }
-
-  // Older deployments predate optimistic-concurrency revisions.
-  try {
-    await db.prepare("SELECT revision FROM vaults LIMIT 1").first();
-  } catch {
-    await db
-      .prepare("ALTER TABLE vaults ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
-      .run();
-  }
+  await db.prepare("SELECT auth_hash, revision FROM vaults LIMIT 1").first();
 }
 
 export async function ensureVaultHistoryTable(db: Env["DB"]) {
-  await db
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS vault_history (vault_id TEXT NOT NULL, payload TEXT NOT NULL, saved_at INTEGER NOT NULL)",
-    )
-    .run();
+  await db.prepare("SELECT vault_id FROM vault_history LIMIT 1").first();
 }
 
 export async function ensureVaultFilesTable(db: Env["DB"]) {
+  await db.prepare("SELECT id FROM vault_files LIMIT 1").first();
+}
+
+export async function ensureVaultFileUploadTables(db: Env["DB"]) {
+  await db.prepare("SELECT upload_id FROM vault_file_uploads LIMIT 1").first();
   await db
+    .prepare("SELECT upload_id FROM vault_file_upload_chunks LIMIT 1")
+    .first();
+  await db
+    .prepare("SELECT upload_id FROM vault_file_manifests LIMIT 1")
+    .first();
+}
+
+type CollectableUpload = {
+  upload_id: string;
+  state: "staging" | "committed";
+};
+
+// Claim stale uploads in D1 before touching R2. A concurrent commit requires a
+// `staging` row and therefore cannot make a claimed upload live after GC has
+// begun. Referenced manifests are always excluded.
+export async function garbageCollectAbandonedUploads(
+  db: Env["DB"],
+  bucket: Env["VAULT_FILES"],
+  now = Date.now(),
+) {
+  await ensureVaultFileUploadTables(db);
+  const candidates = await db
     .prepare(
-      "CREATE TABLE IF NOT EXISTS vault_files (id TEXT NOT NULL, chunk_index INTEGER NOT NULL, payload TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (id, chunk_index))",
+      "SELECT upload_id, state FROM vault_file_uploads WHERE created_at < ?1 AND state IN ('staging', 'committed') AND NOT EXISTS (SELECT 1 FROM vault_file_manifests WHERE vault_file_manifests.upload_id = vault_file_uploads.upload_id AND vault_file_manifests.deleted_at IS NULL) ORDER BY created_at ASC LIMIT ?2",
     )
-    .run();
+    .bind(now - STAGED_UPLOAD_MAX_AGE_MS, STAGED_UPLOAD_GC_LIMIT)
+    .all<CollectableUpload>();
+
+  let removed = 0;
+  for (const candidate of candidates.results) {
+    const claimed = await db
+      .prepare(
+        "UPDATE vault_file_uploads SET state = 'collecting' WHERE upload_id = ?1 AND state = ?2 AND NOT EXISTS (SELECT 1 FROM vault_file_manifests WHERE vault_file_manifests.upload_id = vault_file_uploads.upload_id AND vault_file_manifests.deleted_at IS NULL)",
+      )
+      .bind(candidate.upload_id, candidate.state)
+      .run();
+    if (claimed.meta.changes !== 1) continue;
+
+    try {
+      await deleteObjectPrefix(bucket, stagedUploadPrefix(candidate.upload_id));
+      await db.batch([
+        db
+          .prepare("DELETE FROM vault_file_upload_chunks WHERE upload_id = ?1")
+          .bind(candidate.upload_id),
+        db
+          .prepare(
+            "DELETE FROM vault_file_uploads WHERE upload_id = ?1 AND state = 'collecting' AND NOT EXISTS (SELECT 1 FROM vault_file_manifests WHERE vault_file_manifests.upload_id = vault_file_uploads.upload_id AND vault_file_manifests.deleted_at IS NULL)",
+          )
+          .bind(candidate.upload_id),
+      ]);
+      removed += 1;
+    } catch (error) {
+      await db
+        .prepare(
+          "UPDATE vault_file_uploads SET state = ?1 WHERE upload_id = ?2 AND state = 'collecting'",
+        )
+        .bind(candidate.state, candidate.upload_id)
+        .run();
+      throw error;
+    }
+  }
+  return removed;
 }
 
 export async function ensureVaultAuthAttemptsTable(db: Env["DB"]) {
   await db
-    .prepare(
-      "CREATE TABLE IF NOT EXISTS vault_auth_attempts (client_key TEXT PRIMARY KEY, window_started_at INTEGER NOT NULL, attempt_count INTEGER NOT NULL)",
-    )
-    .run();
+    .prepare("SELECT client_key FROM vault_auth_attempts LIMIT 1")
+    .first();
 }
 
 export function isValidFileId(value: unknown): value is string {
@@ -190,7 +301,8 @@ async function authFailureResponse(request: Request, env: Env) {
       .run();
   }
 
-  return (attempt?.attempt_count ?? AUTH_FAILURE_LIMIT + 1) <= AUTH_FAILURE_LIMIT
+  return (attempt?.attempt_count ?? AUTH_FAILURE_LIMIT + 1) <=
+    AUTH_FAILURE_LIMIT
     ? errorResponse("Unauthorized.", 401, env)
     : errorResponse("Too many authentication attempts.", 429, env);
 }

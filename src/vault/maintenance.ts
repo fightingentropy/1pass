@@ -17,6 +17,9 @@ import {
   type VaultBackup,
 } from "./backup";
 import {
+  abortAttachmentUpload,
+  beginAttachmentUpload,
+  commitAttachmentUpload,
   deleteAttachmentRemote,
   downloadAttachmentEncryptedChunk,
   loadVaultRecord,
@@ -98,13 +101,27 @@ export async function restoreCompleteBackup(options: {
       }
       return chunk;
     },
-    writeChunk: (fileId, chunkIndex, chunk) =>
-      uploadEncryptedChunk(
+    beginUpload: (fileId, totalChunks) =>
+      beginAttachmentUpload(
         fileId,
+        totalChunks,
+        options.currentSession.authToken,
+      ),
+    writeChunk: (uploadId, chunkIndex, chunk) =>
+      uploadEncryptedChunk(
+        uploadId,
         chunkIndex,
         chunk,
         options.currentSession.authToken,
       ),
+    commitUpload: (uploadId, manifest) =>
+      commitAttachmentUpload(
+        uploadId,
+        manifest,
+        options.currentSession.authToken,
+      ),
+    abortUpload: (uploadId) =>
+      abortAttachmentUpload(uploadId, options.currentSession.authToken),
     cleanupFile: (fileId) =>
       deleteAttachmentRemote(fileId, options.currentSession.authToken),
     onProgress: options.onProgress,
@@ -166,13 +183,27 @@ export async function rotateMasterPassword(options: {
         chunkIndex,
         options.currentSession.authToken,
       ),
-    writeChunk: (fileId, chunkIndex, chunk) =>
-      uploadEncryptedChunk(
+    beginUpload: (fileId, totalChunks) =>
+      beginAttachmentUpload(
         fileId,
+        totalChunks,
+        options.currentSession.authToken,
+      ),
+    writeChunk: (uploadId, chunkIndex, chunk) =>
+      uploadEncryptedChunk(
+        uploadId,
         chunkIndex,
         chunk,
         options.currentSession.authToken,
       ),
+    commitUpload: (uploadId, manifest) =>
+      commitAttachmentUpload(
+        uploadId,
+        manifest,
+        options.currentSession.authToken,
+      ),
+    abortUpload: (uploadId) =>
+      abortAttachmentUpload(uploadId, options.currentSession.authToken),
     cleanupFile: (fileId) =>
       deleteAttachmentRemote(fileId, options.currentSession.authToken),
     onProgress: options.onProgress,

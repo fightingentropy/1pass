@@ -6,6 +6,7 @@ import {
   formatPercent,
   type CalculatorInput,
 } from "./calculator";
+import { VAULT_ORIGIN } from "../origins";
 
 const FALLBACK = (value: string, fallback: number) => {
   const num = Number(value);
@@ -62,7 +63,7 @@ export default function TaxCalculator() {
   return (
     <div class="tax-page">
       <header class="tax-header">
-        <a class="tax-back" href="/">← Back to vault</a>
+        <a class="tax-back" href={VAULT_ORIGIN} rel="noreferrer">← Back to vault</a>
         <h1>CIS tax calculator</h1>
         <p class="subtitle">2026/27 tax year</p>
       </header>

@@ -1,4 +1,5 @@
 import {
+  isValidVaultKdf,
   isVaultEncryptedPayload,
   type VaultEncryptedPayload,
   type VaultPayload,
@@ -15,6 +16,7 @@ import {
   loadVaultRecord,
   migrateAttachmentEncryption,
   readVaultMeta,
+  rotateVaultRecord,
   saveVaultRecord,
 } from "./api";
 import { normalizeVault } from "./types";
@@ -96,22 +98,17 @@ export function clearLegacyPasswordMeta() {
   localStorage.removeItem(LEGACY_STORAGE_KEYS.passwordSalt);
 }
 
-function readPendingMigrationKdf(
+function readPendingMigration(
   decrypted: unknown,
-): VaultEncryptedPayload["kdf"] | null {
+): { version: 1 | 2; kdf: VaultEncryptedPayload["kdf"] } | null {
   if (!decrypted || typeof decrypted !== "object") return null;
   const pending = (decrypted as Partial<VaultPayload>).pendingMigration;
   const kdf = pending?.kdf;
-  if (
-    kdf &&
-    kdf.name === "PBKDF2" &&
-    kdf.hash === "SHA-256" &&
-    typeof kdf.iterations === "number" &&
-    kdf.iterations > 0 &&
-    typeof kdf.salt === "string" &&
-    kdf.salt.length > 0
-  ) {
-    return kdf;
+  if (isValidVaultKdf(kdf)) {
+    return {
+      version: pending?.version === 2 ? 2 : 1,
+      kdf,
+    };
   }
   return null;
 }
@@ -141,7 +138,7 @@ async function reencryptAllAttachments(
   return failed;
 }
 
-async function migrateVaultToV2(
+async function migrateVaultToV3(
   password: string,
   vault: VaultPayload,
   oldSession: VaultSession,
@@ -152,15 +149,32 @@ async function migrateVaultToV2(
   onProgress("Upgrading vault security…");
   const nextSession = await createVaultSession(password);
   const markedPayload = await encryptVaultPayload(
-    { ...vault, pendingMigration: { kdf: oldSession.kdf } },
+    {
+      ...vault,
+      pendingMigration: {
+        version: oldSession.version === 2 ? 2 : 1,
+        kdf: oldSession.kdf,
+      },
+    },
     nextSession,
   );
-  let nextRevision = await saveVaultRecord(
-    markedPayload,
-    nextSession.authToken,
-    revision,
-    bootstrapSecret,
-  );
+  // A v2 vault already has an auth hash derived from the current session.
+  // Rotate that hash with the still-authorized old token at the same atomic
+  // point where the v3 envelope becomes live. A legacy v1 vault has no auth
+  // token yet, so it still uses the one-time bootstrap adoption path.
+  let nextRevision = oldSession.authToken
+    ? await rotateVaultRecord(
+        markedPayload,
+        oldSession.authToken,
+        nextSession.authToken,
+        revision,
+      )
+    : await saveVaultRecord(
+        markedPayload,
+        nextSession.authToken,
+        revision,
+        bootstrapSecret,
+      );
 
   const failed = await reencryptAllAttachments(
     vault,
@@ -170,14 +184,17 @@ async function migrateVaultToV2(
   );
 
   onProgress("Upgrading vault security…");
-  if (failed === 0) {
-    const cleanPayload = await encryptVaultPayload(vault, nextSession);
-    nextRevision = await saveVaultRecord(
-      cleanPayload,
-      nextSession.authToken,
-      nextRevision,
+  if (failed > 0) {
+    throw new Error(
+      `The security upgrade could not finish for ${failed} attachment${failed === 1 ? "" : "s"}. The recovery marker was kept; retry unlock.`,
     );
   }
+  const cleanPayload = await encryptVaultPayload(vault, nextSession);
+  nextRevision = await saveVaultRecord(
+    cleanPayload,
+    nextSession.authToken,
+    nextRevision,
+  );
   return { session: nextSession, revision: nextRevision };
 }
 
@@ -230,15 +247,15 @@ export async function unlockVaultWithPassword(
       throw new Error("Incorrect password. Try again.");
     }
 
-    const pendingKdf = readPendingMigrationKdf(decrypted);
+    const pendingMigration = readPendingMigration(decrypted);
     const vault = normalizeVault(decrypted);
 
-    if (session.version >= 2) {
-      if (pendingKdf) {
+    if (session.version === 3) {
+      if (pendingMigration) {
         onProgress("Finishing security upgrade…");
         const oldSession = await restoreVaultSession(password, {
-          version: 1,
-          kdf: pendingKdf,
+          version: pendingMigration.version,
+          kdf: pendingMigration.kdf,
         });
         const failed = await reencryptAllAttachments(
           vault,
@@ -246,14 +263,17 @@ export async function unlockVaultWithPassword(
           session,
           onProgress,
         );
-        if (failed === 0) {
-          const cleanPayload = await encryptVaultPayload(vault, session);
-          revision = await saveVaultRecord(
-            cleanPayload,
-            session.authToken,
-            revision,
+        if (failed > 0) {
+          throw new Error(
+            `The security upgrade could not finish for ${failed} attachment${failed === 1 ? "" : "s"}. Retry unlock.`,
           );
         }
+        const cleanPayload = await encryptVaultPayload(vault, session);
+        revision = await saveVaultRecord(
+          cleanPayload,
+          session.authToken,
+          revision,
+        );
         return { session, vault, migrated: true, revision };
       }
       if (meta.requiresBootstrap) {
@@ -272,7 +292,7 @@ export async function unlockVaultWithPassword(
       };
     }
 
-    const migrated = await migrateVaultToV2(
+    const migrated = await migrateVaultToV3(
       password,
       vault,
       session,

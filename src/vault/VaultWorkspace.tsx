@@ -15,6 +15,7 @@ import {
   type UploadProgress,
   type VaultSection,
 } from "./types";
+import { TAX_ORIGIN } from "../origins";
 
 type VaultWorkspaceProps = {
   vault: VaultPayload;
@@ -161,7 +162,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
           >
             Change password
           </button>
-          <a class="btn quiet" href="/tax">
+          <a class="btn quiet" href={TAX_ORIGIN} rel="noreferrer">
             Tax
           </a>
           <button

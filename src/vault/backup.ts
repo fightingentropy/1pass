@@ -6,11 +6,14 @@ import {
 } from "../../functions/api/vault/schema";
 import {
   decryptVaultPayload,
+  encryptedChunkDigest,
   encryptVaultPayload,
+  hasV3AttachmentManifest,
   isEncryptedChunk,
   restoreVaultSession,
   type EncryptedChunk,
   type VaultSession,
+  verifyV3AttachmentManifest,
 } from "../vaultCrypto";
 import { normalizeVault } from "./types";
 
@@ -99,12 +102,29 @@ export async function createVaultBackup(
   );
   const attachments: VaultBackupAttachment[] = [];
   for (const [fileIndex, attachment] of allAttachments.entries()) {
+    const manifest = hasV3AttachmentManifest(attachment) ? attachment : null;
+    if (attachment.envelopeVersion === 3 && !manifest) {
+      throw new Error(`The manifest for "${attachment.name}" is invalid.`);
+    }
+    if (manifest && !(await verifyV3AttachmentManifest(manifest, session))) {
+      throw new Error(
+        `The manifest for "${attachment.name}" failed authentication.`,
+      );
+    }
     const chunks: EncryptedChunk[] = [];
     for (let index = 0; index < attachment.chunks; index += 1) {
       onProgress?.(
         `Backing up files (${fileIndex + 1}/${allAttachments.length}, chunk ${index + 1}/${attachment.chunks})…`,
       );
-      chunks.push(await readChunk(attachment, index));
+      const chunk = await readChunk(attachment, index);
+      if (
+        manifest &&
+        (chunk.version !== 3 ||
+          (await encryptedChunkDigest(chunk)) !== manifest.chunkHashes[index])
+      ) {
+        throw new Error(`A chunk for "${attachment.name}" was altered.`);
+      }
+      chunks.push(chunk);
     }
     attachments.push({ id: attachment.id, chunks });
   }
@@ -144,6 +164,14 @@ export async function decryptVaultBackup(
   for (const attachment of vault.identities.flatMap(
     (identity) => identity.attachments,
   )) {
+    if (
+      attachment.envelopeVersion === 3 &&
+      !(await verifyV3AttachmentManifest(attachment, session))
+    ) {
+      throw new Error(
+        `The manifest for "${attachment.name}" failed authentication.`,
+      );
+    }
     referencedIds.add(attachment.id);
     const chunks = attachments.get(attachment.id);
     if (!chunks || chunks.length !== attachment.chunks) {

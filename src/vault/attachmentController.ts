@@ -133,7 +133,7 @@ export function createAttachmentController(options: AttachmentControllerOptions)
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
         const thumb = await createImageThumb(file);
-        const chunks = await uploadAttachmentBytes(
+        const envelope = await uploadAttachmentBytes(
           fileId,
           bytes,
           currentSession,
@@ -144,7 +144,7 @@ export function createAttachmentController(options: AttachmentControllerOptions)
           name: file.name,
           mimeType: file.type || "application/octet-stream",
           size: file.size,
-          chunks,
+          ...envelope,
           thumb,
           createdAt: Date.now(),
         };
