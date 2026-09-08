@@ -92,7 +92,7 @@ export default function Gate(props: GateProps) {
             </span>
           </div>
           <div class="gate-heading">
-            <span class="detail-kicker">PERSONAL VAULT</span>
+            <span class="detail-kicker">Personal vault</span>
             <h1>
               {props.mode === "setup"
                 ? "Create your vault."

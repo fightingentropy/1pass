@@ -248,7 +248,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
             <span>Private</span>
           </div>
         </div>
-        <span class="nav-label">COLLECTIONS</span>
+        <span class="nav-label">Collections</span>
         <nav class="nav-list" aria-label="Vault collections">
           <button
             class={`nav-item ${isIdentity() ? "" : "active"}`}

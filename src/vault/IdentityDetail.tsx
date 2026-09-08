@@ -213,7 +213,7 @@ export default function IdentityDetail(props: IdentityDetailProps) {
           <span class="detail-emblem identity-emblem" aria-hidden="true">
             {identityInitials(props.identity)}
           </span>
-          <span class="detail-kicker">IDENTITY</span>
+          <span class="detail-kicker">Identity</span>
           <h2>
             {props.identity.firstName} {props.identity.lastName}
           </h2>

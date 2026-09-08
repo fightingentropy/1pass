@@ -29,7 +29,7 @@ export default function ApiKeyDetail(props: ApiKeyDetailProps) {
           <span class="detail-emblem" aria-hidden="true">
             <KeyIcon />
           </span>
-          <span class="detail-kicker">API KEY</span>
+          <span class="detail-kicker">API key</span>
           <h2>{props.item.label}</h2>
           <p class="muted">{props.item.service.trim() || "Personal vault"}</p>
         </div>

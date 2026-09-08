@@ -109,7 +109,7 @@ export function IdentityModal(props: IdentityModalProps) {
       onSubmit={props.onSubmit}
       onClose={props.onClose}
     >
-      <div class="form-section-label">PERSONAL DETAILS</div>
+      <div class="form-section-label">Personal details</div>
       <label class="field">
         <span class="field-label">First name</span>
         <input
@@ -163,7 +163,7 @@ export function IdentityModal(props: IdentityModalProps) {
           }
         />
       </label>
-      <div class="form-section-label">GOVERNMENT IDs · OPTIONAL</div>
+      <div class="form-section-label">Government IDs · Optional</div>
       <label class="field">
         <span class="field-label">National Insurance number</span>
         <input

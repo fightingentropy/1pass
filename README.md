@@ -18,7 +18,7 @@ Open [http://localhost:5173](http://localhost:5173) to access the vault.
 - **TypeScript 7** for native, strict application and Worker type-checking
 - **Web Crypto API** for PBKDF2 + HKDF key derivation and AES-GCM encryption
 - **Cloudflare Pages Functions + D1 + R2** for vault metadata and file persistence
-- Self-hosted fonts (Inter, JetBrains Mono) — no third-party requests at runtime
+- Self-hosted fonts (Geist, JetBrains Mono) — no third-party requests at runtime
 
 ## Features
 
