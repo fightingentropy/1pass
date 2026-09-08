@@ -58,7 +58,7 @@ Open [http://localhost:5173](http://localhost:5173) to access the vault.
 
 Install dependencies with `bun install`.
 
-Vite development uses same-origin `/api` requests. Use the local Pages stack below when exercising Functions; production builds may set `VITE_API_BASE` explicitly.
+All builds use same-origin `/api` requests, so the app works on both `1pass.pages.dev` and `1pass.erlin.org`. Use the local Pages stack below when exercising Functions; `VITE_API_BASE` only configures the local Vite proxy target.
 
 For a fully local stack (frontend + Functions + local D1), create local secrets,
 apply the checked-in migration, and start Pages development:
@@ -74,6 +74,8 @@ The local app is served at [http://localhost:8788](http://localhost:8788).
 to `VITE_API_BASE`.
 
 ## Cloudflare Pages Deployment
+
+Production: [1pass.erlin.org](https://1pass.erlin.org). The custom domain is attached to the existing `1pass` Pages project, with a proxied CNAME pointing to `1pass.pages.dev`.
 
 1. The checked-in `wrangler.jsonc` contains the existing Pages project and D1 binding.
 2. Create the private attachment bucket once: `bunx wrangler r2 bucket create 1pass-vault-files`.

@@ -18,15 +18,6 @@ import {
 } from "../vaultCrypto";
 import { ATTACHMENT_CHUNK_SIZE } from "./types";
 
-// In local Vite dev, always hit same-origin /api (proxied to the deployed
-// Pages Functions). Cross-origin VITE_API_BASE fails when ALLOWED_ORIGIN is
-// production-only. Production builds still use VITE_API_BASE when set.
-const apiBase = import.meta.env.DEV
-  ? ""
-  : (import.meta.env.VITE_API_BASE as string | undefined)
-      ?.trim()
-      .replace(/\/+$/, "");
-
 export class ApiError extends Error {
   status: number;
 
@@ -48,7 +39,6 @@ async function requestJson<T>(
   path: string,
   init?: RequestInit & { authToken?: string; bootstrapSecret?: string },
 ) {
-  const url = apiBase ? `${apiBase}${path}` : path;
   const headers: Record<string, string> = {
     ...((init?.headers as Record<string, string>) ?? {}),
   };
@@ -61,7 +51,9 @@ async function requestJson<T>(
   if (init?.bootstrapSecret) {
     headers[VAULT_BOOTSTRAP_HEADER] = init.bootstrapSecret;
   }
-  const response = await fetch(url, {
+  // Every Pages domain serves the same vault API. Relative requests keep
+  // custom domains working without cross-origin authentication or CORS.
+  const response = await fetch(path, {
     ...init,
     headers,
     cache: "no-store",
