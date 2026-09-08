@@ -1,7 +1,15 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { Show } from "solid-js";
+import ItemActions from "./ItemActions";
 import type { VaultApiKeyItem } from "../../functions/api/vault/schema";
 import { formatTimestamp, maskSecretValue } from "./types";
-import { CheckIcon, CopyIcon, MoreIcon } from "./icons";
+import {
+  CheckIcon,
+  CopyIcon,
+  EyeIcon,
+  EyeOffIcon,
+  KeyIcon,
+  LockIcon,
+} from "./icons";
 
 type ApiKeyDetailProps = {
   item: VaultApiKeyItem;
@@ -14,116 +22,98 @@ type ApiKeyDetailProps = {
 };
 
 export default function ApiKeyDetail(props: ApiKeyDetailProps) {
-  const [menuOpen, setMenuOpen] = createSignal(false);
-
-  createEffect(() => {
-    if (!menuOpen()) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest(".overflow-menu")) return;
-      setMenuOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    onCleanup(() => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    });
-  });
-
   return (
-    <div>
+    <div class="detail-content">
       <div class="detail-header">
-        <div>
+        <div class="detail-heading">
+          <span class="detail-emblem" aria-hidden="true">
+            <KeyIcon />
+          </span>
+          <span class="detail-kicker">API KEY</span>
           <h2>{props.item.label}</h2>
-          <p class="muted">API key</p>
+          <p class="muted">{props.item.service.trim() || "Personal vault"}</p>
         </div>
-        <div class="detail-actions">
-          <div class="overflow-menu">
-            <button
-              class="icon-button icon-only"
-              type="button"
-              aria-label="More actions"
-              aria-expanded={menuOpen()}
-              title="More"
-              onClick={() => setMenuOpen((current) => !current)}
-            >
-              <MoreIcon />
-            </button>
-            <Show when={menuOpen()}>
-              <div class="overflow-panel" role="menu">
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    props.onEdit();
-                  }}
-                >
-                  Edit
-                </button>
-                <button
-                  class="danger"
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    props.onDelete();
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </Show>
-          </div>
-        </div>
+        <ItemActions
+          itemId={props.item.id}
+          itemType="API key"
+          onEdit={props.onEdit}
+          onDelete={props.onDelete}
+        />
       </div>
-      <div class="detail-grid spaced">
-        <div>
-          <span class="meta-label">Environment</span>
-          <p>{props.item.environment.trim() || "Not provided"}</p>
+      <div class="secret-block">
+        <div class="secret-header">
+          <span class="meta-label">API key</span>
+          <span class="encrypted-label">
+            <LockIcon />
+            Encrypted
+          </span>
         </div>
-        <div class="detail-span">
-          <div class="secret-header">
-            <span class="meta-label">API key</span>
-            <div class="secret-actions">
-              <button
-                class={`secret-toggle icon-copy ${
-                  props.isCopied ? "is-success" : ""
-                }`}
-                type="button"
-                onClick={props.onCopyKey}
-                disabled={!props.item.key.trim()}
-                title={
-                  props.isCopied ? "Copied!" : "Copy API key (clears after 60s)"
-                }
-              >
-                <CopyIcon class="copy-icon" />
-                <CheckIcon class="check-icon" />
-              </button>
-              <button
-                class="secret-toggle"
-                type="button"
-                onClick={props.onToggleVisible}
-                disabled={!props.item.key.trim()}
-              >
-                {props.isKeyVisible ? "Hide" : "Show"}
-              </button>
-            </div>
-          </div>
-          <p class={`secret-value ${props.isKeyVisible ? "" : "masked"}`}>
+        <div class="secret-input-row">
+          <code class={`secret-value ${props.isKeyVisible ? "" : "masked"}`}>
             {props.isKeyVisible
               ? props.item.key.trim() || "Not provided"
               : maskSecretValue(props.item.key)}
-          </p>
+          </code>
+          <button
+            class="icon-button icon-only"
+            type="button"
+            aria-label={props.isKeyVisible ? "Hide API key" : "Show API key"}
+            onClick={props.onToggleVisible}
+            disabled={!props.item.key.trim()}
+            title={props.isKeyVisible ? "Hide API key" : "Show API key"}
+          >
+            <Show when={props.isKeyVisible} fallback={<EyeIcon />}>
+              <EyeOffIcon />
+            </Show>
+          </button>
+          <button
+            class={`icon-button icon-only ${props.isCopied ? "is-success" : ""}`}
+            type="button"
+            aria-label={props.isCopied ? "API key copied" : "Copy API key"}
+            onClick={props.onCopyKey}
+            disabled={!props.item.key.trim()}
+            title="Copy API key (clears after 60s)"
+          >
+            <Show when={props.isCopied} fallback={<CopyIcon />}>
+              <CheckIcon />
+            </Show>
+          </button>
         </div>
-        <div class="detail-span">
-          <span class="meta-label">Notes</span>
-          <p class="notes-content">{props.item.notes.trim() || "Not provided"}</p>
+        <span class="secret-hint" role="status">
+          {props.isCopied
+            ? "Copied to clipboard. Clears after 60 seconds."
+            : "Hidden until you need it."}
+        </span>
+      </div>
+      <div class="detail-properties">
+        <div class="property-row">
+          <span class="meta-label">Service</span>
+          <span>
+            {props.item.service.trim() || (
+              <span class="muted">Not provided</span>
+            )}
+          </span>
         </div>
+        <div class="property-row">
+          <span class="meta-label">Environment</span>
+          <span>
+            <Show
+              when={props.item.environment.trim()}
+              fallback={<span class="muted">Not provided</span>}
+            >
+              <span class="environment-badge">
+                <span />
+                {props.item.environment}
+              </span>
+            </Show>
+          </span>
+        </div>
+      </div>
+      <div class="detail-notes">
+        <span class="meta-label">Notes</span>
+        <p class={`notes-content ${props.item.notes.trim() ? "" : "muted"}`}>
+          {props.item.notes.trim() || "No notes added."}
+        </p>
       </div>
       <div class="detail-footer">
         <span class="meta-label">Created</span>

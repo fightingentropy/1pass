@@ -1,4 +1,10 @@
-import { createSignal, createUniqueId, onMount, Show } from "solid-js";
+import {
+  createSignal,
+  createUniqueId,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 import type { ApiKeyDraft, CredentialDraft, IdentityDraft } from "./types";
 import { generatePassword } from "./types";
 import { CloseIcon } from "./icons";
@@ -15,6 +21,15 @@ type ModalShellProps = {
 };
 
 export function ModalShell(props: ModalShellProps) {
+  const previouslyFocused = document.activeElement;
+  onCleanup(() => {
+    if (
+      previouslyFocused instanceof HTMLElement &&
+      previouslyFocused.isConnected
+    ) {
+      previouslyFocused.focus({ preventScroll: true });
+    }
+  });
   const titleId = createUniqueId();
   let modalRef: HTMLDivElement | undefined;
   return (
@@ -51,7 +66,9 @@ export function ModalShell(props: ModalShellProps) {
         >
           <div class="modal-grid">{props.children}</div>
           <Show when={Boolean(props.error)}>
-            <div class="form-error">{props.error}</div>
+            <div class="form-error" role="alert">
+              {props.error}
+            </div>
           </Show>
           <div class="modal-actions">
             <button class="btn ghost" type="button" onClick={props.onClose}>
@@ -86,12 +103,13 @@ export function IdentityModal(props: IdentityModalProps) {
   return (
     <ModalShell
       title={props.isEditing ? "Edit identity" : "Create identity"}
-      description="First name and last name are required. Everything else is optional."
+      description="Personal details, kept together and kept private."
       error={props.error}
       submitLabel={props.isEditing ? "Save changes" : "Save identity"}
       onSubmit={props.onSubmit}
       onClose={props.onClose}
     >
+      <div class="form-section-label">PERSONAL DETAILS</div>
       <label class="field">
         <span class="field-label">First name</span>
         <input
@@ -145,8 +163,9 @@ export function IdentityModal(props: IdentityModalProps) {
           }
         />
       </label>
+      <div class="form-section-label">GOVERNMENT IDs · OPTIONAL</div>
       <label class="field">
-        <span class="field-label">NINO</span>
+        <span class="field-label">National Insurance number</span>
         <input
           type="text"
           value={props.draft.nino}
@@ -156,7 +175,7 @@ export function IdentityModal(props: IdentityModalProps) {
         />
       </label>
       <label class="field">
-        <span class="field-label">NHS Number</span>
+        <span class="field-label">NHS number</span>
         <input
           type="text"
           value={props.draft.nhsNumber}
@@ -166,7 +185,7 @@ export function IdentityModal(props: IdentityModalProps) {
         />
       </label>
       <label class="field">
-        <span class="field-label">Pass No</span>
+        <span class="field-label">Passport number</span>
         <input
           type="text"
           value={props.draft.passNumber}
@@ -180,11 +199,13 @@ export function IdentityModal(props: IdentityModalProps) {
         <input
           type="text"
           value={props.draft.utr}
-          onInput={(event) => props.onChange({ utr: event.currentTarget.value })}
+          onInput={(event) =>
+            props.onChange({ utr: event.currentTarget.value })
+          }
         />
       </label>
       <label class="field">
-        <span class="field-label">Gov Gateway ID</span>
+        <span class="field-label">Government Gateway ID</span>
         <input
           type="text"
           value={props.draft.govGatewayId}
@@ -226,7 +247,7 @@ export function ApiKeyModal(props: ApiKeyModalProps) {
   return (
     <ModalShell
       title={props.isEditing ? "Edit API key" : "Create API key"}
-      description="Label and API key are required. Environment and notes are optional."
+      description="Keep a service key safely in your personal vault."
       error={props.error}
       submitLabel={props.isEditing ? "Save changes" : "Save API key"}
       onSubmit={props.onSubmit}
@@ -255,11 +276,14 @@ export function ApiKeyModal(props: ApiKeyModalProps) {
         />
       </label>
       <label class="field full">
-        <span class="field-label">API Key</span>
+        <span class="field-label">API key</span>
         <textarea
-          rows={4}
+          rows={3}
+          spellcheck={false}
           value={props.draft.key}
-          onInput={(event) => props.onChange({ key: event.currentTarget.value })}
+          onInput={(event) =>
+            props.onChange({ key: event.currentTarget.value })
+          }
           required
         />
       </label>
@@ -307,7 +331,7 @@ export function CredentialModal(props: CredentialModalProps) {
   return (
     <ModalShell
       title={props.isEditing ? "Edit password" : "Add password"}
-      description="Label and password are required. Username, website and notes are optional."
+      description="Save a login for this identity."
       error={props.error}
       submitLabel={props.isEditing ? "Save changes" : "Save password"}
       onSubmit={props.onSubmit}

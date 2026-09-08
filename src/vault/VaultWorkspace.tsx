@@ -1,4 +1,12 @@
-import { For, Show } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+} from "solid-js";
 import type {
   VaultAttachment,
   VaultCredential,
@@ -8,7 +16,20 @@ import type {
 } from "../../functions/api/vault/schema";
 import ApiKeyDetail from "./ApiKeyDetail";
 import IdentityDetail from "./IdentityDetail";
-import { KeyIcon, PaperclipIcon } from "./icons";
+import {
+  ArrowLeftIcon,
+  ChevronIcon,
+  DownloadIcon,
+  IdentityIcon,
+  KeyIcon,
+  LockIcon,
+  PaperclipIcon,
+  PlusIcon,
+  SearchIcon,
+  SettingsIcon,
+  ShieldIcon,
+  UploadIcon,
+} from "./icons";
 import {
   identityInitials,
   type SyncState,
@@ -36,7 +57,7 @@ type VaultWorkspaceProps = {
   attachmentError: string;
   onSectionChange: (section: VaultSection) => void;
   onQueryChange: (query: string) => void;
-  onSearchRef: (element: HTMLInputElement) => void;
+  onSearchReady: (focusSearch: (() => void) | undefined) => void;
   onRetrySync: () => void;
   onExport: () => void;
   onImportFile: (file: File) => void;
@@ -57,36 +78,286 @@ type VaultWorkspaceProps = {
   onAddFiles: (identityId: string, files: File[]) => void;
   onOpenAttachment: (attachment: VaultAttachment) => void;
   onDownloadAttachment: (attachment: VaultAttachment) => void;
-  onDeleteAttachment: (
-    identityId: string,
-    attachment: VaultAttachment,
-  ) => void;
+  onDeleteAttachment: (identityId: string, attachment: VaultAttachment) => void;
   onAddCredential: (identityId: string) => void;
-  onEditCredential: (
-    identityId: string,
-    credential: VaultCredential,
-  ) => void;
-  onDeleteCredential: (
-    identityId: string,
-    credential: VaultCredential,
-  ) => void;
+  onEditCredential: (identityId: string, credential: VaultCredential) => void;
+  onDeleteCredential: (identityId: string, credential: VaultCredential) => void;
 };
 
 export default function VaultWorkspace(props: VaultWorkspaceProps) {
+  let listScrollY = 0;
+  let searchInputRef: HTMLInputElement | undefined;
+  let detailRef: HTMLElement | undefined;
+  let listRef: HTMLDivElement | undefined;
   let importInputRef: HTMLInputElement | undefined;
+  let settingsRef: HTMLDetailsElement | undefined;
+  const [mobileDetailOpen, setMobileDetailOpen] = createSignal(false);
+  const [sortOrder, setSortOrder] = createSignal("recent");
   const maintenanceBusy = () => Boolean(props.maintenanceLabel);
+  const isIdentity = () => props.activeSection === "identities";
+  const sectionTitle = () => (isIdentity() ? "Identities" : "API keys");
+  const itemCount = () =>
+    isIdentity()
+      ? props.filteredIdentities.length
+      : props.filteredApiKeys.length;
+  const sortedKeys = createMemo(() =>
+    [...props.filteredApiKeys].sort((a, b) =>
+      sortOrder() === "name"
+        ? a.label.localeCompare(b.label)
+        : b.createdAt - a.createdAt,
+    ),
+  );
+  const sortedIdentities = createMemo(() =>
+    [...props.filteredIdentities].sort((a, b) =>
+      sortOrder() === "name"
+        ? `${a.firstName} ${a.lastName}`.localeCompare(
+            `${b.firstName} ${b.lastName}`,
+          )
+        : b.createdAt - a.createdAt,
+    ),
+  );
+
+  const closeSettings = () => {
+    if (settingsRef) settingsRef.open = false;
+  };
+  createEffect(() => {
+    const onPointerDown = (event: PointerEvent) => {
+      if (!settingsRef?.contains(event.target as Node)) closeSettings();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && settingsRef?.open) {
+        closeSettings();
+        settingsRef.querySelector("summary")?.focus();
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    onCleanup(() => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    });
+  });
+
+  onMount(() => {
+    props.onSearchReady(() => {
+      setMobileDetailOpen(false);
+      closeSettings();
+      queueMicrotask(() => {
+        searchInputRef?.focus();
+        searchInputRef?.select();
+      });
+    });
+    onCleanup(() => props.onSearchReady(undefined));
+  });
+  const openMobileDetail = () => {
+    const isMobile = window.matchMedia("(max-width: 720px)").matches;
+    if (isMobile) listScrollY = window.scrollY;
+    setMobileDetailOpen(true);
+    if (isMobile) {
+      queueMicrotask(() => {
+        window.scrollTo({ top: 0, behavior: "instant" });
+        detailRef?.focus({ preventScroll: true });
+      });
+    }
+  };
+  const backToList = () => {
+    setMobileDetailOpen(false);
+    queueMicrotask(() => {
+      window.scrollTo({ top: listScrollY, behavior: "instant" });
+      listRef
+        ?.querySelector<HTMLButtonElement>('[aria-current="true"]')
+        ?.focus({ preventScroll: true });
+    });
+  };
+  const changeSection = (section: VaultSection) => {
+    setMobileDetailOpen(false);
+    props.onSectionChange(section);
+  };
+  const navigateList = (event: KeyboardEvent) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const current = event.target as HTMLButtonElement;
+    const next =
+      event.key === "ArrowDown"
+        ? current.nextElementSibling
+        : current.previousElementSibling;
+    if (next instanceof HTMLButtonElement) {
+      event.preventDefault();
+      next.focus();
+      next.click();
+    }
+  };
+  const emptyList = () => (
+    <div class="empty-state">
+      <span class="empty-state-icon">
+        <Show
+          when={props.query.trim()}
+          fallback={isIdentity() ? <IdentityIcon /> : <KeyIcon />}
+        >
+          <SearchIcon />
+        </Show>
+      </span>
+      <h3>
+        {props.query.trim()
+          ? "No matches found"
+          : isIdentity()
+            ? "Your identities, together"
+            : "A home for your API keys"}
+      </h3>
+      <p>
+        {props.query.trim()
+          ? "Try another name or keyword."
+          : isIdentity()
+            ? "Keep personal details, logins and documents in one place."
+            : "Save the keys you use, ready when you need them."}
+      </p>
+      <button
+        class="btn ghost"
+        type="button"
+        onClick={() =>
+          props.query.trim()
+            ? props.onQueryChange("")
+            : isIdentity()
+              ? props.onNewIdentity()
+              : props.onNewApiKey()
+        }
+      >
+        {props.query.trim()
+          ? "Clear search"
+          : isIdentity()
+            ? "Add an identity"
+            : "Add an API key"}
+      </button>
+    </div>
+  );
 
   return (
-    <>
-      <header class="topbar">
+    <div class="workspace">
+      <aside class="vault-sidebar">
         <div class="brand brand-row">
           <span class="brand-logo" aria-hidden="true" />
-          <div class="brand-text">
-            <span class="brand-mark">1Pass</span>
-            <span class="brand-subtitle">Personal vault</span>
+          <span class="brand-mark">
+            1Pass<span class="brand-period">.</span>
+          </span>
+        </div>
+        <div class="vault-context">
+          <span class="vault-context-icon">
+            <ShieldIcon />
+          </span>
+          <div>
+            <strong>Personal vault</strong>
+            <span>Private</span>
           </div>
         </div>
-        <div class="topbar-actions">
+        <span class="nav-label">COLLECTIONS</span>
+        <nav class="nav-list" aria-label="Vault collections">
+          <button
+            class={`nav-item ${isIdentity() ? "" : "active"}`}
+            type="button"
+            aria-current={!isIdentity() ? "page" : undefined}
+            title="API keys"
+            disabled={maintenanceBusy()}
+            onClick={() => changeSection("apiKeys")}
+          >
+            <KeyIcon />
+            <span class="nav-name">API keys</span>
+            <span class="nav-count">{props.vault.apiKeys.length}</span>
+          </button>
+          <button
+            class={`nav-item ${isIdentity() ? "active" : ""}`}
+            type="button"
+            aria-current={isIdentity() ? "page" : undefined}
+            title="Identities"
+            disabled={maintenanceBusy()}
+            onClick={() => changeSection("identities")}
+          >
+            <IdentityIcon />
+            <span class="nav-name">Identities</span>
+            <span class="nav-count">{props.vault.identities.length}</span>
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <div class="sidebar-security">
+            <ShieldIcon />
+            <span>Encrypted on your device</span>
+          </div>
+          <div class="sidebar-tools">
+            <details class="vault-settings" ref={settingsRef}>
+              <summary title="Vault settings" aria-label="Vault settings">
+                <SettingsIcon />
+                <span>Vault settings</span>
+                <ChevronIcon />
+              </summary>
+              <div class="settings-panel">
+                <span class="menu-heading">Manage your vault</span>
+                <button
+                  type="button"
+                  disabled={maintenanceBusy()}
+                  onClick={() => {
+                    closeSettings();
+                    props.onExport();
+                  }}
+                >
+                  <DownloadIcon />
+                  Export backup
+                </button>
+                <button
+                  type="button"
+                  disabled={maintenanceBusy()}
+                  onClick={() => {
+                    closeSettings();
+                    importInputRef?.click();
+                  }}
+                >
+                  <UploadIcon />
+                  Import backup
+                </button>
+                <div class="menu-divider" />
+                <button
+                  type="button"
+                  disabled={maintenanceBusy()}
+                  onClick={() => {
+                    closeSettings();
+                    props.onChangePassword();
+                  }}
+                >
+                  <KeyIcon />
+                  Change password
+                </button>
+              </div>
+            </details>
+            <button
+              class="sidebar-lock"
+              type="button"
+              disabled={maintenanceBusy()}
+              onClick={props.onLock}
+              title="Lock vault"
+              aria-label="Lock vault"
+            >
+              <LockIcon />
+            </button>
+          </div>
+          <span class="sidebar-lock-hint">Auto-locks after 15 minutes</span>
+        </div>
+        <input
+          ref={importInputRef}
+          hidden
+          type="file"
+          accept="application/json,.json"
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0];
+            event.currentTarget.value = "";
+            if (file) props.onImportFile(file);
+          }}
+        />
+      </aside>
+
+      <main class={`main ${mobileDetailOpen() ? "has-detail" : ""}`}>
+        <header class="topbar">
+          <div class="breadcrumb">
+            <span>Personal vault</span>
+            <span class="breadcrumb-slash">/</span>
+            <strong>{sectionTitle()}</strong>
+          </div>
           <Show
             when={maintenanceBusy()}
             fallback={
@@ -94,203 +365,145 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                 when={props.syncState === "error"}
                 fallback={
                   <span
-                    class={`status-pill sync-pill ${
-                      props.syncState === "idle" ? "" : "busy"
-                    }`}
+                    class={`sync-status ${props.syncState === "idle" ? "" : "busy"}`}
+                    role="status"
                     title={
                       props.lastSaved
                         ? `Last saved ${new Date(props.lastSaved).toLocaleTimeString()}`
-                        : "All changes encrypted & synced"
+                        : "All changes encrypted and synced"
                     }
                   >
-                    <Show when={props.syncState === "idle"} fallback={"Saving…"}>
-                      Saved
-                    </Show>
+                    <span class="status-dot" />
+                    {props.syncState === "idle"
+                      ? "All changes saved"
+                      : "Saving changes…"}
                   </span>
                 }
               >
                 <button
-                  class="status-pill sync-pill error"
+                  class="sync-status error"
                   type="button"
-                  title={props.syncError || "Saving failed. Click to retry."}
+                  title={props.syncError}
                   onClick={props.onRetrySync}
                 >
                   {props.syncError.includes("another tab or device")
-                    ? "Conflict — Lock to reload"
-                    : "Sync failed — Retry"}
+                    ? "Sync conflict · Reload vault"
+                    : "Sync failed · Retry"}
                 </button>
               </Show>
             }
           >
-            <span class="status-pill sync-pill busy" role="status">
+            <span class="sync-status busy" role="status">
+              <span class="upload-spinner" />
               {props.maintenanceLabel}
             </span>
           </Show>
-          <button
-            class="btn quiet"
-            type="button"
-            disabled={maintenanceBusy()}
-            onClick={props.onExport}
-          >
-            Export backup
-          </button>
-          <button
-            class="btn quiet"
-            type="button"
-            disabled={maintenanceBusy()}
-            onClick={() => importInputRef?.click()}
-          >
-            Import backup
-          </button>
-          <input
-            ref={importInputRef}
-            hidden
-            type="file"
-            accept="application/json,.json"
-            onChange={(event) => {
-              const file = event.currentTarget.files?.[0];
-              event.currentTarget.value = "";
-              if (file) props.onImportFile(file);
-            }}
-          />
-          <button
-            class="btn quiet"
-            type="button"
-            disabled={maintenanceBusy()}
-            onClick={props.onChangePassword}
-          >
-            Change password
-          </button>
-          <button
-            class="btn ghost lock"
-            type="button"
-            disabled={maintenanceBusy()}
-            onClick={props.onLock}
-          >
-            Lock
-          </button>
-        </div>
-      </header>
-
-      <section
-        class={`dashboard ${maintenanceBusy() ? "maintenance-active" : ""}`}
-        aria-busy={maintenanceBusy()}
-      >
-        <aside class="vault-sidebar">
-          <nav class="nav-list">
-            <button
-              class={`nav-item ${
-                props.activeSection === "identities" ? "active" : ""
-              }`}
-              type="button"
-              onClick={() => props.onSectionChange("identities")}
-            >
-              Identities
-              <span>{props.vault.identities.length}</span>
-            </button>
-            <button
-              class={`nav-item ${
-                props.activeSection === "apiKeys" ? "active" : ""
-              }`}
-              type="button"
-              onClick={() => props.onSectionChange("apiKeys")}
-            >
-              API Keys
-              <span>{props.vault.apiKeys.length}</span>
-            </button>
-          </nav>
-        </aside>
-
-        <main class="main">
+        </header>
+        <section
+          class="workspace-content"
+          inert={maintenanceBusy()}
+          aria-busy={maintenanceBusy()}
+        >
           <div class="main-header">
-            <div />
-            <div class="action-row">
-              <label class="search-field">
-                <span class="sr-only">Search vault items</span>
-                <input
-                  ref={props.onSearchRef}
-                  type="search"
-                  placeholder={
-                    props.activeSection === "identities"
-                      ? "Search identities (⌘K)"
-                      : "Search API keys (⌘K)"
-                  }
-                  value={props.query}
-                  onInput={(event) =>
-                    props.onQueryChange(event.currentTarget.value)
-                  }
-                />
-              </label>
-              <button
-                class="btn primary icon"
-                type="button"
-                onClick={() =>
-                  props.activeSection === "identities"
-                    ? props.onNewIdentity()
-                    : props.onNewApiKey()
-                }
-              >
-                + New
-              </button>
-            </div>
-          </div>
-
-          <div class="items-grid">
-            <div class="items-list">
-              <div class="list-header">
-                <span>
-                  {props.activeSection === "identities"
-                    ? props.filteredIdentities.length
-                    : props.filteredApiKeys.length}{" "}
-                  {props.activeSection === "identities"
-                    ? props.filteredIdentities.length === 1
-                      ? "identity"
-                      : "identities"
-                    : props.filteredApiKeys.length === 1
-                      ? "key"
-                      : "keys"}
+            <div>
+              <div class="section-heading">
+                <h1>{sectionTitle()}</h1>
+                <span class="section-count">
+                  {isIdentity()
+                    ? props.vault.identities.length
+                    : props.vault.apiKeys.length}
                 </span>
               </div>
-              <div class="list-body">
+              <p>
+                {isIdentity()
+                  ? "Your personal details, logins and documents."
+                  : "Manage the keys to your apps and services."}
+              </p>
+            </div>
+            <button
+              class="btn primary"
+              type="button"
+              onClick={() =>
+                isIdentity() ? props.onNewIdentity() : props.onNewApiKey()
+              }
+            >
+              <PlusIcon />
+              <span>{isIdentity() ? "New identity" : "New API key"}</span>
+            </button>
+          </div>
+          <div class="items-grid">
+            <section class="items-list" aria-label={sectionTitle()}>
+              <div class="list-search">
+                <label class="search-field">
+                  <SearchIcon />
+                  <span class="sr-only">Search vault items</span>
+                  <input
+                    ref={searchInputRef}
+                    type="search"
+                    placeholder={
+                      isIdentity() ? "Search identities" : "Search API keys"
+                    }
+                    value={props.query}
+                    onFocus={() => setMobileDetailOpen(false)}
+                    onInput={(event) =>
+                      props.onQueryChange(event.currentTarget.value)
+                    }
+                  />
+                  <kbd>⌘ K</kbd>
+                </label>
+              </div>
+              <div class="list-header">
+                <span aria-live="polite">
+                  {itemCount()} {itemCount() === 1 ? "item" : "items"}
+                </span>
+                <label class="sort-control">
+                  <span class="sr-only">Sort items</span>
+                  <select
+                    value={sortOrder()}
+                    onChange={(event) =>
+                      setSortOrder(event.currentTarget.value)
+                    }
+                  >
+                    <option value="recent">Newest first</option>
+                    <option value="name">Name A–Z</option>
+                  </select>
+                  <ChevronIcon />
+                </label>
+              </div>
+              <div class="list-body" ref={listRef} onKeyDown={navigateList}>
                 <Show
-                  when={props.activeSection === "identities"}
+                  when={isIdentity()}
                   fallback={
-                    <Show
-                      when={props.filteredApiKeys.length > 0}
-                      fallback={
-                        <div class="empty-state">
-                          <p class="empty">
-                            {props.query.trim()
-                              ? "No API keys match your search."
-                              : "No API keys yet."}
-                          </p>
-                          <Show when={!props.query.trim()}>
-                            <button
-                              class="btn ghost"
-                              type="button"
-                              onClick={props.onNewApiKey}
-                            >
-                              Add your first API key
-                            </button>
-                          </Show>
-                        </div>
-                      }
-                    >
-                      <For each={props.filteredApiKeys}>
+                    <Show when={sortedKeys().length > 0} fallback={emptyList()}>
+                      <For each={sortedKeys()}>
                         {(item) => (
                           <button
-                            class={`list-item ${
-                              props.selectedApiKey?.id === item.id ? "active" : ""
-                            }`}
+                            class={`list-item ${props.selectedApiKey?.id === item.id ? "active" : ""}`}
                             type="button"
-                            onClick={() => props.onSelectApiKey(item.id)}
+                            aria-current={
+                              props.selectedApiKey?.id === item.id
+                                ? "true"
+                                : undefined
+                            }
+                            onClick={() => {
+                              props.onSelectApiKey(item.id);
+                              openMobileDetail();
+                            }}
                           >
-                            <div>
+                            <span class="item-monogram" aria-hidden="true">
+                              {(item.service.trim() || item.label.trim())
+                                .slice(0, 2)
+                                .toUpperCase()}
+                            </span>
+                            <span class="list-item-text">
                               <strong>{item.label}</strong>
                               <span class="muted">
-                                {item.environment || "No details"}
+                                {[item.service, item.environment]
+                                  .filter(Boolean)
+                                  .join(" · ") || "API key"}
                               </span>
-                            </div>
+                            </span>
+                            <ChevronIcon class="list-chevron" />
                           </button>
                         )}
                       </For>
@@ -298,51 +511,40 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                   }
                 >
                   <Show
-                    when={props.filteredIdentities.length > 0}
-                    fallback={
-                      <div class="empty-state">
-                        <p class="empty">
-                          {props.query.trim()
-                            ? "No identities match your search."
-                            : "No identities yet."}
-                        </p>
-                        <Show when={!props.query.trim()}>
-                          <button
-                            class="btn ghost"
-                            type="button"
-                            onClick={props.onNewIdentity}
-                          >
-                            Create your first identity
-                          </button>
-                        </Show>
-                      </div>
-                    }
+                    when={sortedIdentities().length > 0}
+                    fallback={emptyList()}
                   >
-                    <For each={props.filteredIdentities}>
+                    <For each={sortedIdentities()}>
                       {(item) => (
                         <button
-                          class={`list-item ${
-                            props.selectedIdentity?.id === item.id ? "active" : ""
-                          }`}
+                          class={`list-item ${props.selectedIdentity?.id === item.id ? "active" : ""}`}
                           type="button"
-                          onClick={() => props.onSelectIdentity(item.id)}
+                          aria-current={
+                            props.selectedIdentity?.id === item.id
+                              ? "true"
+                              : undefined
+                          }
+                          onClick={() => {
+                            props.onSelectIdentity(item.id);
+                            openMobileDetail();
+                          }}
                         >
                           <span class="avatar" aria-hidden="true">
                             {identityInitials(item)}
                           </span>
-                          <div>
+                          <span class="list-item-text">
                             <strong>
                               {item.firstName} {item.lastName}
                             </strong>
                             <span class="muted">
-                              {item.email || item.phone || "No contact details"}
+                              {item.email || item.phone || "Identity"}
                             </span>
-                          </div>
+                          </span>
                           <span class="list-item-end">
                             <Show when={item.credentials.length > 0}>
                               <span
                                 class="count-badge"
-                                title={`${item.credentials.length} password(s)`}
+                                title={`${item.credentials.length} passwords`}
                               >
                                 <KeyIcon />
                                 {item.credentials.length}
@@ -351,7 +553,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                             <Show when={item.attachments.length > 0}>
                               <span
                                 class="count-badge"
-                                title={`${item.attachments.length} file(s)`}
+                                title={`${item.attachments.length} files`}
                               >
                                 <PaperclipIcon />
                                 {item.attachments.length}
@@ -364,9 +566,24 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                   </Show>
                 </Show>
               </div>
-            </div>
-
-            <div class="detail-card">
+              <div class="list-footer">
+                <span class="keyboard-keys" aria-hidden="true">
+                  <kbd>↑</kbd>
+                  <kbd>↓</kbd>
+                </span>
+                <span>Navigate items</span>
+              </div>
+            </section>
+            <section
+              class="detail-card"
+              ref={detailRef}
+              tabindex={-1}
+              aria-label="Item details"
+            >
+              <button class="mobile-back" type="button" onClick={backToList}>
+                <ArrowLeftIcon />
+                All {isIdentity() ? "identities" : "API keys"}
+              </button>
               <Show
                 when={props.activeSection === "identities"}
                 fallback={
@@ -374,7 +591,15 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                     when={props.selectedApiKey}
                     fallback={
                       <div class="empty-detail">
-                        <p>Select an API key to view details.</p>
+                        <span class="empty-detail-icon">
+                          <KeyIcon />
+                        </span>
+                        <h2>No item selected</h2>
+                        <p>
+                          {props.query.trim()
+                            ? "Matching items will appear in the list."
+                            : "Choose an API key from the list to see its details."}
+                        </p>
                       </div>
                     }
                   >
@@ -396,7 +621,15 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                   when={props.selectedIdentity}
                   fallback={
                     <div class="empty-detail">
-                      <p>Select an identity to view details.</p>
+                      <span class="empty-detail-icon">
+                        <IdentityIcon />
+                      </span>
+                      <h2>No item selected</h2>
+                      <p>
+                        {props.query.trim()
+                          ? "Matching items will appear in the list."
+                          : "Choose an identity from the list to see its details."}
+                      </p>
                     </div>
                   }
                 >
@@ -432,10 +665,10 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                   )}
                 </Show>
               </Show>
-            </div>
+            </section>
           </div>
-        </main>
-      </section>
-    </>
+        </section>
+      </main>
+    </div>
   );
 }

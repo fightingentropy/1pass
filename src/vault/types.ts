@@ -85,11 +85,11 @@ export const IDENTITY_CONTACT_FIELDS = [
 ] as const;
 
 export const IDENTITY_GOVERNMENT_FIELDS = [
-  { label: "NINO", field: "nino" },
-  { label: "NHS Number", field: "nhsNumber" },
-  { label: "Pass No", field: "passNumber" },
+  { label: "National Insurance number", field: "nino" },
+  { label: "NHS number", field: "nhsNumber" },
+  { label: "Passport number", field: "passNumber" },
   { label: "UTR", field: "utr" },
-  { label: "Gov Gateway ID", field: "govGatewayId" },
+  { label: "Government Gateway ID", field: "govGatewayId" },
 ] as const;
 
 export function createId() {
@@ -331,7 +331,7 @@ export function formatBytes(value: number) {
 export function maskSecretValue(value: string) {
   const trimmed = value.trim();
   if (!trimmed) return "Not provided";
-  return "*".repeat(Math.max(12, Math.min(trimmed.length, 24)));
+  return "•".repeat(Math.max(12, Math.min(trimmed.length, 24)));
 }
 
 export function identityInitials(identity: VaultIdentityItem) {

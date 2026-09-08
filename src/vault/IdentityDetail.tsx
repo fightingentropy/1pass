@@ -4,12 +4,14 @@ import type {
   VaultCredential,
   VaultIdentityItem,
 } from "../../functions/api/vault/schema";
+import ItemActions from "./ItemActions";
 import type { UploadProgress } from "./types";
 import {
   formatBytes,
   formatTimestamp,
   IDENTITY_CONTACT_FIELDS,
   IDENTITY_GOVERNMENT_FIELDS,
+  identityInitials,
   isImageAttachment,
   isPdfAttachment,
 } from "./types";
@@ -24,7 +26,6 @@ import {
   ImageIcon,
   KeyIcon,
   MoreIcon,
-  PencilIcon,
   TrashIcon,
 } from "./icons";
 
@@ -59,24 +60,25 @@ function CopyableFields(props: {
         {(fieldDef) => {
           const value = () => props.identity[fieldDef.field] as string;
           return (
-            <div
+            <button
+              type="button"
+              disabled={!value().trim()}
+              aria-label={`Copy ${fieldDef.label}`}
               class={`copyable-field ${value().trim() ? "" : "empty"}`}
               onClick={() => props.onCopyField(value(), fieldDef.field)}
               title={value().trim() ? "Click to copy" : undefined}
             >
               <span class="meta-label">{fieldDef.label}</span>
-              <p>{value().trim() || "Not provided"}</p>
-              <Show when={value().trim()}>
-                <span
-                  class={`copied-badge ${
-                    props.copiedField === fieldDef.field ? "visible" : ""
-                  }`}
-                >
+              <span class="field-value">
+                {value().trim() || "Not provided"}
+              </span>
+              <Show when={props.copiedField === fieldDef.field}>
+                <span class="copied-badge visible" role="status">
                   <CheckIcon />
                   Copied
                 </span>
               </Show>
-            </div>
+            </button>
           );
         }}
       </For>
@@ -93,7 +95,9 @@ function CollapsibleSection(props: {
   children: any;
 }) {
   return (
-    <section class={`detail-section ${props.open ? "is-open" : "is-collapsed"}`}>
+    <section
+      class={`detail-section ${props.open ? "is-open" : "is-collapsed"}`}
+    >
       <div class="detail-section-header">
         <button
           class="detail-section-toggle"
@@ -111,7 +115,10 @@ function CollapsibleSection(props: {
           </span>
         </button>
         <Show when={props.actions}>
-          <div class="detail-section-actions" onClick={(e) => e.stopPropagation()}>
+          <div
+            class="detail-section-actions"
+            onClick={(e) => e.stopPropagation()}
+          >
             {props.actions}
           </div>
         </Show>
@@ -200,32 +207,24 @@ export default function IdentityDetail(props: IdentityDetailProps) {
   };
 
   return (
-    <div>
+    <div class="detail-content">
       <div class="detail-header">
-        <div>
+        <div class="detail-heading">
+          <span class="detail-emblem identity-emblem" aria-hidden="true">
+            {identityInitials(props.identity)}
+          </span>
+          <span class="detail-kicker">IDENTITY</span>
           <h2>
             {props.identity.firstName} {props.identity.lastName}
           </h2>
-          <p class="muted">Identity</p>
+          <p class="muted">{props.identity.email || "Personal vault"}</p>
         </div>
-        <div class="detail-actions">
-          <button
-            class="icon-button icon-only"
-            type="button"
-            aria-label="Edit identity"
-            onClick={props.onEdit}
-          >
-            <PencilIcon />
-          </button>
-          <button
-            class="icon-button icon-only"
-            type="button"
-            aria-label="Delete identity"
-            onClick={props.onDelete}
-          >
-            <TrashIcon />
-          </button>
-        </div>
+        <ItemActions
+          itemId={props.identity.id}
+          itemType="identity"
+          onEdit={props.onEdit}
+          onDelete={props.onDelete}
+        />
       </div>
 
       <CollapsibleSection
@@ -286,16 +285,14 @@ export default function IdentityDetail(props: IdentityDetailProps) {
           when={props.identity.credentials.length > 0}
           fallback={
             <p class="attachments-empty">
-              No passwords yet. Store logins that belong to this identity —
-              they stay encrypted inside the vault.
+              No logins yet. Add a password for this identity.
             </p>
           }
         >
           <div class="credential-list">
             <For each={props.identity.credentials}>
               {(credential) => {
-                const isVisible = () =>
-                  visibleCredentialId() === credential.id;
+                const isVisible = () => visibleCredentialId() === credential.id;
                 const menuOpen = () => openMenuId() === credential.id;
                 const subtitle = () =>
                   credential.username.trim() ||
@@ -306,7 +303,10 @@ export default function IdentityDetail(props: IdentityDetailProps) {
                     <span class="credential-icon" aria-hidden="true">
                       <KeyIcon />
                     </span>
-                    <div
+                    <button
+                      type="button"
+                      aria-label={`Copy username for ${credential.label}`}
+                      disabled={!credential.username.trim()}
                       class="credential-info copyable-inline"
                       title={
                         credential.username.trim()
@@ -326,7 +326,7 @@ export default function IdentityDetail(props: IdentityDetailProps) {
                           ? "Username copied"
                           : subtitle()}
                       </span>
-                    </div>
+                    </button>
                     <span
                       class={`credential-password ${isVisible() ? "" : "masked"}`}
                     >
@@ -498,8 +498,7 @@ export default function IdentityDetail(props: IdentityDetailProps) {
               when={props.identity.attachments.length > 0}
               fallback={
                 <p class="attachments-empty">
-                  No files yet. Add passport scans, photos or PDFs — drag & drop
-                  or paste works too. Everything is encrypted before upload.
+                  Drop or paste photos and documents here, or choose Add.
                 </p>
               }
             >

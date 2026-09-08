@@ -65,7 +65,7 @@ export default function App() {
   let autoLockTimer: number | undefined;
   let saveVersion = 0;
   let lastActivityAt = Date.now();
-  let searchInputRef: HTMLInputElement | undefined;
+  let focusSearch: (() => void) | undefined;
 
   const [view, setView] = createSignal<GateView>("loading");
   const [vault, setVault] = createSignal<VaultPayload>(createVaultDefault());
@@ -757,8 +757,16 @@ export default function App() {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
       if (view() !== "unlocked") return;
       event.preventDefault();
-      searchInputRef?.focus();
-      searchInputRef?.select();
+      if (
+        maintenanceLabel() ||
+        isModalOpen() ||
+        credentialModal() ||
+        passwordModalOpen() ||
+        importFile() ||
+        confirmRequest() ||
+        attachmentPreview()
+      ) return;
+      focusSearch?.();
     }
   };
 
@@ -887,8 +895,8 @@ export default function App() {
               setQuery("");
             }}
             onQueryChange={setQuery}
-            onSearchRef={(element) => {
-              searchInputRef = element;
+            onSearchReady={(focus) => {
+              focusSearch = focus;
             }}
             onRetrySync={() => {
               if (error().includes("another tab or device")) {

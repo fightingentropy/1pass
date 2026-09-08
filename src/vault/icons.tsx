@@ -156,12 +156,104 @@ export function CloseIcon() {
 
 export function ChevronIcon(props: { class?: string }) {
   return (
-    <svg
-      class={props.class}
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-    >
+    <svg class={props.class} viewBox="0 0 24 24" aria-hidden="true">
       <path d="m7 10 5 5 5-5" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="10.5" cy="10.5" r="6.5" {...strokeProps} />
+      <path d="m16 16 4.5 4.5" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function PlusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function LockIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="5" y="10" width="14" height="11" rx="2.5" {...strokeProps} />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function ShieldIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"
+        {...strokeProps}
+      />
+      <path d="m8.5 12 2.5 2.5 4.5-5" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function IdentityIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="16" rx="3" {...strokeProps} />
+      <circle cx="8.5" cy="10" r="2" {...strokeProps} />
+      <path d="M5.5 16c.4-3 5.6-3 6 0M15 9h3M15 13h3" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function SettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M4 7h16M4 17h16" {...strokeProps} />
+      <circle
+        cx="9"
+        cy="7"
+        r="3"
+        fill="var(--settings-fill, #1d2420)"
+        stroke="currentColor"
+        stroke-width="1.6"
+      />
+      <circle
+        cx="15"
+        cy="17"
+        r="3"
+        fill="var(--settings-fill, #1d2420)"
+        stroke="currentColor"
+        stroke-width="1.6"
+      />
+    </svg>
+  );
+}
+
+export function ArrowLeftIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m10 5-7 7 7 7M3 12h18" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function ArrowRightIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m14 5 7 7-7 7M3 12h18" {...strokeProps} />
+    </svg>
+  );
+}
+
+export function UploadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 16V4m0 0 4 4m-4-4-4 4M4 16v4h16v-4" {...strokeProps} />
     </svg>
   );
 }
