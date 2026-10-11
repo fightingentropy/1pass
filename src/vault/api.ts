@@ -35,6 +35,14 @@ export function isConflictError(error: unknown) {
   return error instanceof ApiError && error.status === 409;
 }
 
+// Browser requests stay relative so every Pages domain serves its own API.
+// The CLI points this at a vault URL instead.
+let apiBase = "";
+
+export function configureApiBase(baseUrl: string) {
+  apiBase = baseUrl.replace(/\/+$/, "");
+}
+
 async function requestJson<T>(
   path: string,
   init?: RequestInit & { authToken?: string; bootstrapSecret?: string },
@@ -53,7 +61,7 @@ async function requestJson<T>(
   }
   // Every Pages domain serves the same vault API. Relative requests keep
   // custom domains working without cross-origin authentication or CORS.
-  const response = await fetch(path, {
+  const response = await fetch(apiBase + path, {
     ...init,
     headers,
     cache: "no-store",

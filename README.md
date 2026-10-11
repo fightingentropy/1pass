@@ -35,6 +35,31 @@ Open [http://localhost:5173](http://localhost:5173) to access the vault.
 - **Offline auto-lock recovery** — if syncing fails at lock time, an encrypted recovery copy is kept in that browser and offered on the next unlock
 - **Legacy migration** — plaintext (v0), v1, and v2 vaults are upgraded to the v3 scheme on unlock, including re-encryption of all attachment chunks (idempotent if interrupted)
 
+## Command line
+
+`bun run cli` lists identities, attaches a file to one, or downloads an
+attachment, using the same client-side encryption as the browser. It asks for
+the master password at a hidden prompt (or reads it from the first line of
+stdin when piped) and never stores it. Upgrades of older vaults stay in the
+browser; the CLI refuses a vault that still needs one.
+
+```bash
+bun run cli list
+bun run cli attach ~/path/to/file.key --identity "First Last"
+bun run cli download file.key --out ./file.key
+```
+
+`attach` encrypts and uploads the file, saves the vault with conflict
+protection, then downloads the copy again to confirm it matches. `--replace`
+swaps an attachment of the same name; `--identity` takes a full name or an id
+from `list`, and is asked for interactively when omitted. Downloads are written
+with owner-only permissions. The vault address defaults to `VAULT_URL` or
+`https://1pass.erlin.org`; plain `http` is allowed for localhost only. Files
+attached from the CLI get no image thumbnail.
+
+`bun run test:cli` runs the CLI against a local Pages dev server with a
+throwaway vault in a temporary directory.
+
 ## Security
 
 - The master password never leaves the browser; it is only used locally to derive keys
