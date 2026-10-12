@@ -8,7 +8,6 @@ import {
   EyeIcon,
   EyeOffIcon,
   KeyIcon,
-  LockIcon,
 } from "./icons";
 
 type ApiKeyDetailProps = {
@@ -29,9 +28,10 @@ export default function ApiKeyDetail(props: ApiKeyDetailProps) {
           <span class="detail-emblem" aria-hidden="true">
             <KeyIcon />
           </span>
-          <span class="detail-kicker">API key</span>
           <h2>{props.item.label}</h2>
-          <p class="muted">{props.item.service.trim() || "Personal vault"}</p>
+          <Show when={props.item.service.trim()}>
+            <p class="muted">{props.item.service}</p>
+          </Show>
         </div>
         <ItemActions
           itemId={props.item.id}
@@ -43,10 +43,6 @@ export default function ApiKeyDetail(props: ApiKeyDetailProps) {
       <div class="secret-block">
         <div class="secret-header">
           <span class="meta-label">API key</span>
-          <span class="encrypted-label">
-            <LockIcon />
-            Encrypted
-          </span>
         </div>
         <div class="secret-input-row">
           <code class={`secret-value ${props.isKeyVisible ? "" : "masked"}`}>
@@ -80,9 +76,7 @@ export default function ApiKeyDetail(props: ApiKeyDetailProps) {
           </button>
         </div>
         <span class="secret-hint" role="status">
-          {props.isCopied
-            ? "Copied to clipboard. Clears after 60 seconds."
-            : "Hidden until you need it."}
+          {props.isCopied ? "Copied. Clears after 60 seconds." : ""}
         </span>
       </div>
       <div class="detail-properties">

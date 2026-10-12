@@ -1,8 +1,10 @@
-import { createSignal, onCleanup, type Setter } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import type { VaultApiKeyItem } from "../../functions/api/vault/schema";
 import { CLIPBOARD_CLEAR_MS } from "./types";
 
-export function createClipboardController(setError: Setter<string>) {
+export function createClipboardController(
+  notifyError: (message: string) => void,
+) {
   let copiedSecretResetTimer: number | undefined;
   let copiedFieldResetTimer: number | undefined;
   let clipboardClearTimer: number | undefined;
@@ -53,7 +55,7 @@ export function createClipboardController(setError: Setter<string>) {
       }, 1800);
     } catch (copyError) {
       console.error(copyError);
-      setError("Unable to copy the API key.");
+      notifyError("Unable to copy the API key.");
     }
   };
 
@@ -72,7 +74,7 @@ export function createClipboardController(setError: Setter<string>) {
       await copyToClipboard(trimmed);
       markFieldCopied(fieldKey);
     } catch {
-      setError("Unable to copy to clipboard.");
+      notifyError("Unable to copy to clipboard.");
     }
   };
 
@@ -83,7 +85,7 @@ export function createClipboardController(setError: Setter<string>) {
       scheduleClipboardClear(value);
       markFieldCopied(fieldKey);
     } catch {
-      setError("Unable to copy to clipboard.");
+      notifyError("Unable to copy to clipboard.");
     }
   };
 

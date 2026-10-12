@@ -2,9 +2,9 @@ import {
   base64ByteLength,
   isValidVaultKdf,
   VAULT_KDF_ITERATIONS,
-  type VaultAttachment,
   type VaultEncryptedPayload,
   type VaultPayload,
+  type VaultStoredFile,
 } from "../functions/api/vault/schema";
 
 const encoder = new TextEncoder();
@@ -397,9 +397,9 @@ export async function encryptedChunkDigest(chunk: EncryptedChunk) {
     .join("");
 }
 
-export function hasV3AttachmentManifest(
-  attachment: VaultAttachment,
-): attachment is VaultAttachment & {
+export function hasV3AttachmentManifest<T extends VaultStoredFile>(
+  attachment: T,
+): attachment is T & {
   envelopeVersion: 3;
   chunkHashes: string[];
   chunkSizes: number[];
@@ -444,7 +444,7 @@ export async function createV3AttachmentManifest(
   chunkHashes: string[],
   chunkSizes: number[],
 ): Promise<Pick<
-  VaultAttachment,
+  VaultStoredFile,
   "chunks" | "envelopeVersion" | "chunkHashes" | "chunkSizes" | "manifestMac"
 >> {
   if (session.version !== 3 || !session.manifestKey) {
@@ -472,7 +472,7 @@ export async function createV3AttachmentManifest(
 }
 
 export async function verifyV3AttachmentManifest(
-  attachment: VaultAttachment,
+  attachment: VaultStoredFile,
   session: VaultSession,
 ) {
   if (!hasV3AttachmentManifest(attachment) || !session.manifestKey) return false;

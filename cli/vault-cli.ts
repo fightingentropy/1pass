@@ -32,6 +32,7 @@ import {
 } from "../src/vault/api";
 import {
   ATTACHMENT_MAX_BYTES,
+  attachmentFileIds,
   createId,
   formatBytes,
   normalizeVault,
@@ -181,8 +182,7 @@ function describe(error: unknown) {
 
 type Unlocked = { session: VaultSession; vault: VaultPayload; revision: number };
 
-// Mirrors the browser unlock for an up-to-date vault. Upgrades, bootstrap
-// adoption and migration recovery stay in the browser, which can confirm them.
+// Mirrors the browser unlock. Only envelope v3 vaults are supported.
 async function unlock(url: string): Promise<Unlocked> {
   configureApiBase(url);
   let meta;
@@ -192,10 +192,8 @@ async function unlock(url: string): Promise<Unlocked> {
     throw new CliError(`Cannot reach the vault at ${url}: ${describe(error)}`);
   }
   if (!meta.exists) throw new CliError(`No vault exists at ${url}.`);
-  if (meta.requiresBootstrap || meta.version !== 3 || !meta.kdf) {
-    throw new CliError(
-      "This vault needs a one-time security upgrade. Unlock it in the browser first, then retry.",
-    );
+  if (meta.version !== 3 || !meta.kdf) {
+    throw new CliError("This vault uses an unsupported format.");
   }
   const password = await readPassword();
   process.stderr.write("Deriving keys…\n");
@@ -213,11 +211,6 @@ async function unlock(url: string): Promise<Unlocked> {
     decrypted = await decryptVaultPayload(record.payload, session);
   } catch {
     throw new CliError("Incorrect password.");
-  }
-  if (decrypted && typeof decrypted === "object" && "pendingMigration" in decrypted) {
-    throw new CliError(
-      "A security upgrade is in progress. Unlock the vault in the browser to finish it, then retry.",
-    );
   }
   return { session, vault: normalizeVault(decrypted), revision: record.revision };
 }
@@ -362,7 +355,9 @@ async function attach(url: string, options: Options) {
   }
   for (const previous of replaced) {
     try {
-      await deleteAttachmentRemote(previous.id, session.authToken);
+      for (const id of attachmentFileIds(previous)) {
+        await deleteAttachmentRemote(id, session.authToken);
+      }
     } catch (error) {
       process.stderr.write(
         `warning: the previous "${name}" was replaced, but its encrypted data could not be removed: ${describe(error)}\n`,

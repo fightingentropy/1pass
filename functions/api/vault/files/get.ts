@@ -1,11 +1,7 @@
 import {
   DEFAULT_VAULT_ID,
   checkVaultAuth,
-  ensureVaultFileUploadTables,
-  ensureVaultFilesTable,
-  ensureVaultTable,
   errorResponse,
-  fileChunkKey,
   getFileBucket,
   getDb,
   isValidFileId,
@@ -48,107 +44,55 @@ export async function onRequestGet({
     }
 
     const db = getDb(env);
-    await ensureVaultTable(db);
-
-    const authFailure = await checkVaultAuth(request, db, env);
+    const authFailure = await checkVaultAuth(request, db, env, {
+      requireVault: true,
+    });
     if (authFailure) return authFailure;
 
-    const bucket = getFileBucket(env);
-    await ensureVaultFileUploadTables(db);
+    // One round trip resolves the manifest pointer, the session's declared
+    // chunk count, and the committed hash of the requested chunk. Every stored
+    // attachment is served through a committed manifest.
     const committed = await db
       .prepare(
-        "SELECT vault_file_manifests.upload_id, vault_file_manifests.deleted_at, vault_file_uploads.total_chunks FROM vault_file_manifests LEFT JOIN vault_file_uploads ON vault_file_uploads.upload_id = vault_file_manifests.upload_id WHERE vault_file_manifests.vault_id = ?1 AND vault_file_manifests.file_id = ?2",
+        "SELECT m.upload_id, m.deleted_at, u.total_chunks, c.chunk_hash FROM vault_file_manifests m LEFT JOIN vault_file_uploads u ON u.upload_id = m.upload_id LEFT JOIN vault_file_upload_chunks c ON c.upload_id = m.upload_id AND c.chunk_index = ?3 WHERE m.vault_id = ?1 AND m.file_id = ?2",
       )
-      .bind(DEFAULT_VAULT_ID, id)
+      .bind(DEFAULT_VAULT_ID, id, chunkIndex)
       .first<{
         upload_id: string;
         deleted_at: number | null;
         total_chunks: number | null;
+        chunk_hash: string | null;
       }>();
-    if (committed) {
-      if (committed.deleted_at !== null) {
-        return errorResponse("File chunk not found.", 404, env);
-      }
-      if (committed.total_chunks === null) {
-        return errorResponse("File data is corrupted.", 500, env);
-      }
-      if (chunkIndex >= committed.total_chunks) {
-        return errorResponse("File chunk not found.", 404, env);
-      }
-      const chunk = await db
-        .prepare(
-          "SELECT chunk_hash FROM vault_file_upload_chunks WHERE upload_id = ?1 AND chunk_index = ?2",
-        )
-        .bind(committed.upload_id, chunkIndex)
-        .first<{ chunk_hash: string }>();
-      const object = await bucket.get(
-        stagedChunkKey(committed.upload_id, chunkIndex),
-      );
-      if (!object || !chunk || object.size > MAX_FILE_CHUNK_JSON_BYTES) {
-        return errorResponse("File data is corrupted.", 500, env);
-      }
-      try {
-        const serialized = await object.text();
-        if ((await sha256Hex(serialized)) !== chunk.chunk_hash) {
-          return errorResponse("File data is corrupted.", 500, env);
-        }
-        return jsonResponse({ payload: JSON.parse(serialized) }, env);
-      } catch (parseError) {
-        logError("Committed vault file chunk parse failed", parseError);
-        return errorResponse("File data is corrupted.", 500, env);
-      }
+    if (!committed || committed.deleted_at !== null) {
+      return errorResponse("File chunk not found.", 404, env);
     }
-
-    const key = fileChunkKey(id, chunkIndex);
-    const object = await bucket.get(key);
-    if (object) {
-      if (object.size > MAX_FILE_CHUNK_JSON_BYTES) {
-        return errorResponse("File data is corrupted.", 500, env);
-      }
-      try {
-        return jsonResponse({ payload: JSON.parse(await object.text()) }, env);
-      } catch (parseError) {
-        logError("R2 vault file chunk parse failed", parseError);
-        return errorResponse("File data is corrupted.", 500, env);
-      }
+    if (committed.total_chunks === null) {
+      return errorResponse("File data is corrupted.", 500, env);
     }
-
-    // Legacy deployments stored chunks in D1. Read them until first access,
-    // then copy to R2 and remove the row only after the object write succeeds.
-    await ensureVaultFilesTable(db);
-    const row = await db
-      .prepare(
-        "SELECT payload FROM vault_files WHERE id = ?1 AND chunk_index = ?2",
-      )
-      .bind(id, chunkIndex)
-      .first<{ payload: string }>();
-
-    if (!row?.payload) {
+    if (chunkIndex >= committed.total_chunks) {
       return errorResponse("File chunk not found.", 404, env);
     }
 
-    let payload: unknown = null;
-    try {
-      payload = JSON.parse(row.payload);
-    } catch (parseError) {
-      logError("Vault file chunk parse failed", parseError);
+    const object = await getFileBucket(env).get(
+      stagedChunkKey(committed.upload_id, chunkIndex),
+    );
+    if (
+      !object ||
+      committed.chunk_hash === null ||
+      object.size > MAX_FILE_CHUNK_JSON_BYTES
+    ) {
       return errorResponse("File data is corrupted.", 500, env);
     }
-
     try {
-      await bucket.put(key, row.payload, {
-        httpMetadata: { contentType: "application/json" },
-        customMetadata: { fileId: id, chunkIndex: String(chunkIndex) },
-      });
-      await db
-        .prepare("DELETE FROM vault_files WHERE id = ?1 AND chunk_index = ?2")
-        .bind(id, chunkIndex)
-        .run();
-    } catch (migrationError) {
-      logError("Legacy vault file migration to R2 failed", migrationError);
+      const serialized = await object.text();
+      if ((await sha256Hex(serialized)) !== committed.chunk_hash) {
+        return errorResponse("File data is corrupted.", 500, env);
+      }
+      return jsonResponse({ payload: JSON.parse(serialized) }, env);
+    } catch (parseError) {
+      logError("Committed vault file chunk parse failed", parseError);
+      return errorResponse("File data is corrupted.", 500, env);
     }
-
-    return jsonResponse({ payload }, env);
   } catch (error) {
     logError("Vault file load failed", error);
     return errorResponse("Unable to load the file chunk.", 500, env);

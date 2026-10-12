@@ -1,18 +1,32 @@
-export type VaultAttachment = {
+// One encrypted file in storage: its random id and chunk count, plus the v3
+// manifest that binds every chunk to this id and its exact position. The
+// manifest lives inside the encrypted vault payload, so changing a chunk,
+// dropping one, or replaying one from another file is detectable.
+export type VaultStoredFile = {
   id: string;
-  name: string;
-  mimeType: string;
-  size: number;
   chunks: number;
-  thumb: string;
-  createdAt: number;
-  // v3 attachments are bound to this file id and their exact chunk position.
-  // The manifest lives inside the encrypted vault payload, so changing a
-  // chunk, dropping one, or replaying one from another file is detectable.
   envelopeVersion?: 3;
   chunkHashes?: string[];
   chunkSizes?: number[];
   manifestMac?: string;
+};
+
+// Image thumbnails are stored as their own one-chunk encrypted file so the
+// vault envelope stays small; they are fetched when the file list is shown.
+export type VaultAttachmentPreview = VaultStoredFile & {
+  mimeType: string;
+  size: number;
+};
+
+export type VaultAttachment = VaultStoredFile & {
+  name: string;
+  mimeType: string;
+  size: number;
+  // Inline JPEG data URL written by releases before thumbnails moved out of
+  // the envelope. Migrated into `preview` after unlock; empty for new files.
+  thumb: string;
+  preview?: VaultAttachmentPreview;
+  createdAt: number;
 };
 
 export type VaultCredential = {
@@ -59,13 +73,6 @@ export type VaultApiKeyItem = {
 export type VaultPayload = {
   identities: VaultIdentityItem[];
   apiKeys: VaultApiKeyItem[];
-  // Present only while a v1→v2 attachment re-encryption is in flight: stores
-  // the OLD (v1) KDF parameters so an interrupted migration can resume with
-  // both keys derivable. Stripped again by the save that ends the migration.
-  pendingMigration?: {
-    version?: 1 | 2;
-    kdf: VaultEncryptedPayload["kdf"];
-  };
 };
 
 // version 1: AES key derived directly from the password via PBKDF2.
@@ -89,7 +96,6 @@ export type VaultEncryptedPayload = {
 
 export type VaultMeta = {
   exists: boolean;
-  requiresBootstrap?: boolean;
   version?: number;
   kdf?: VaultEncryptedPayload["kdf"];
 };

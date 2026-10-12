@@ -27,7 +27,6 @@ import {
   PlusIcon,
   SearchIcon,
   SettingsIcon,
-  ShieldIcon,
   UploadIcon,
 } from "./icons";
 import {
@@ -42,6 +41,7 @@ type VaultWorkspaceProps = {
   activeSection: VaultSection;
   syncState: SyncState;
   syncError: string;
+  syncConflict: boolean;
   lastSaved: number | null;
   maintenanceLabel: string;
   query: string;
@@ -79,6 +79,7 @@ type VaultWorkspaceProps = {
   onOpenAttachment: (attachment: VaultAttachment) => void;
   onDownloadAttachment: (attachment: VaultAttachment) => void;
   onDeleteAttachment: (identityId: string, attachment: VaultAttachment) => void;
+  onLoadPreview: (attachment: VaultAttachment) => Promise<string | null>;
   onAddCredential: (identityId: string) => void;
   onEditCredential: (identityId: string, credential: VaultCredential) => void;
   onDeleteCredential: (identityId: string, credential: VaultCredential) => void;
@@ -198,18 +199,11 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
       </span>
       <h3>
         {props.query.trim()
-          ? "No matches found"
+          ? "No matches"
           : isIdentity()
-            ? "Your identities, together"
-            : "A home for your API keys"}
+            ? "No identities yet"
+            : "No API keys yet"}
       </h3>
-      <p>
-        {props.query.trim()
-          ? "Try another name or keyword."
-          : isIdentity()
-            ? "Keep personal details, logins and documents in one place."
-            : "Save the keys you use, ready when you need them."}
-      </p>
       <button
         class="btn ghost"
         type="button"
@@ -224,8 +218,8 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
         {props.query.trim()
           ? "Clear search"
           : isIdentity()
-            ? "Add an identity"
-            : "Add an API key"}
+            ? "Add identity"
+            : "Add API key"}
       </button>
     </div>
   );
@@ -235,20 +229,8 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
       <aside class="vault-sidebar">
         <div class="brand brand-row">
           <span class="brand-logo" aria-hidden="true" />
-          <span class="brand-mark">
-            1Pass<span class="brand-period">.</span>
-          </span>
+          <span class="brand-mark">1Pass</span>
         </div>
-        <div class="vault-context">
-          <span class="vault-context-icon">
-            <ShieldIcon />
-          </span>
-          <div>
-            <strong>Personal vault</strong>
-            <span>Private</span>
-          </div>
-        </div>
-        <span class="nav-label">Collections</span>
         <nav class="nav-list" aria-label="Vault collections">
           <button
             class={`nav-item ${isIdentity() ? "" : "active"}`}
@@ -276,19 +258,14 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
           </button>
         </nav>
         <div class="sidebar-bottom">
-          <div class="sidebar-security">
-            <ShieldIcon />
-            <span>Encrypted on your device</span>
-          </div>
           <div class="sidebar-tools">
             <details class="vault-settings" ref={settingsRef}>
-              <summary title="Vault settings" aria-label="Vault settings">
+              <summary title="Settings" aria-label="Settings">
                 <SettingsIcon />
-                <span>Vault settings</span>
+                <span>Settings</span>
                 <ChevronIcon />
               </summary>
               <div class="settings-panel">
-                <span class="menu-heading">Manage your vault</span>
                 <button
                   type="button"
                   disabled={maintenanceBusy()}
@@ -330,13 +307,12 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
               type="button"
               disabled={maintenanceBusy()}
               onClick={props.onLock}
-              title="Lock vault"
+              title="Lock vault (auto-locks after 15 minutes idle)"
               aria-label="Lock vault"
             >
               <LockIcon />
             </button>
           </div>
-          <span class="sidebar-lock-hint">Auto-locks after 15 minutes</span>
         </div>
         <input
           ref={importInputRef}
@@ -353,11 +329,6 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
 
       <main class={`main ${mobileDetailOpen() ? "has-detail" : ""}`}>
         <header class="topbar">
-          <div class="breadcrumb">
-            <span>Personal vault</span>
-            <span class="breadcrumb-slash">/</span>
-            <strong>{sectionTitle()}</strong>
-          </div>
           <Show
             when={maintenanceBusy()}
             fallback={
@@ -386,7 +357,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                   title={props.syncError}
                   onClick={props.onRetrySync}
                 >
-                  {props.syncError.includes("another tab or device")
+                  {props.syncConflict
                     ? "Sync conflict · Reload vault"
                     : "Sync failed · Retry"}
                 </button>
@@ -414,11 +385,6 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                     : props.vault.apiKeys.length}
                 </span>
               </div>
-              <p>
-                {isIdentity()
-                  ? "Your personal details, logins and documents."
-                  : "Manage the keys to your apps and services."}
-              </p>
             </div>
             <button
               class="btn primary"
@@ -500,7 +466,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                               <span class="muted">
                                 {[item.service, item.environment]
                                   .filter(Boolean)
-                                  .join(" · ") || "API key"}
+                                  .join(" · ")}
                               </span>
                             </span>
                             <ChevronIcon class="list-chevron" />
@@ -537,7 +503,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                               {item.firstName} {item.lastName}
                             </strong>
                             <span class="muted">
-                              {item.email || item.phone || "Identity"}
+                              {item.email || item.phone}
                             </span>
                           </span>
                           <span class="list-item-end">
@@ -566,13 +532,6 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                   </Show>
                 </Show>
               </div>
-              <div class="list-footer">
-                <span class="keyboard-keys" aria-hidden="true">
-                  <kbd>↑</kbd>
-                  <kbd>↓</kbd>
-                </span>
-                <span>Navigate items</span>
-              </div>
             </section>
             <section
               class="detail-card"
@@ -594,12 +553,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                         <span class="empty-detail-icon">
                           <KeyIcon />
                         </span>
-                        <h2>No item selected</h2>
-                        <p>
-                          {props.query.trim()
-                            ? "Matching items will appear in the list."
-                            : "Choose an API key from the list to see its details."}
-                        </p>
+                        <h2>Select an item</h2>
                       </div>
                     }
                   >
@@ -624,12 +578,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                       <span class="empty-detail-icon">
                         <IdentityIcon />
                       </span>
-                      <h2>No item selected</h2>
-                      <p>
-                        {props.query.trim()
-                          ? "Matching items will appear in the list."
-                          : "Choose an identity from the list to see its details."}
-                      </p>
+                      <h2>Select an item</h2>
                     </div>
                   }
                 >
@@ -652,6 +601,7 @@ export default function VaultWorkspace(props: VaultWorkspaceProps) {
                       onDeleteAttachment={(attachment) =>
                         props.onDeleteAttachment(identity().id, attachment)
                       }
+                      onLoadPreview={props.onLoadPreview}
                       onAddCredential={() =>
                         props.onAddCredential(identity().id)
                       }

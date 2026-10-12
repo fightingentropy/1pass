@@ -61,10 +61,8 @@ export function ImageIcon() {
 export function KeyIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
-      <path
-        d="M15 8a3.5 3.5 0 1 1-3.4 4.3L10 13.9V16h-2v2H5v-3l5.3-5.3A3.5 3.5 0 0 1 15 8Zm1.2 2.3h.01"
-        {...strokeProps}
-      />
+      <circle cx="7" cy="12" r="3.25" {...strokeProps} />
+      <path d="M10.25 12H21m-1 0v3m-3.5-3v2.5" {...strokeProps} />
     </svg>
   );
 }

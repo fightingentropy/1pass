@@ -1,6 +1,7 @@
 import { createSignal, onCleanup, type Accessor, type Setter } from "solid-js";
 import type {
   VaultAttachment,
+  VaultAttachmentPreview,
   VaultIdentityItem,
   VaultPayload,
 } from "../../functions/api/vault/schema";
@@ -12,8 +13,11 @@ import {
 } from "./api";
 import {
   ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_PREVIEW_MIME,
+  attachmentFileIds,
   createId,
-  createImageThumb,
+  createImagePreview,
+  inlineThumbToBytes,
   triggerBlobDownload,
   type AttachmentPreviewState,
   type ConfirmRequest,
@@ -45,6 +49,57 @@ export function createAttachmentController(options: AttachmentControllerOptions)
     const preview = attachmentPreview();
     if (preview) URL.revokeObjectURL(preview.url);
     setAttachmentPreview(null);
+  };
+
+  // Decrypted thumbnail object URLs for the file grid, keyed by preview file
+  // id. Scoped to one unlocked session and revoked on lock.
+  const previewUrls = new Map<string, Promise<string | null>>();
+  const previewObjectUrls = new Set<string>();
+
+  const clearPreviewUrls = () => {
+    for (const url of previewObjectUrls) URL.revokeObjectURL(url);
+    previewObjectUrls.clear();
+    previewUrls.clear();
+  };
+
+  const loadPreviewUrl = (attachment: VaultAttachment) => {
+    const preview = attachment.preview;
+    const currentSession = options.session();
+    if (!preview || !currentSession) return Promise.resolve(null);
+    let pending = previewUrls.get(preview.id);
+    if (!pending) {
+      pending = downloadAttachmentBlob(preview, currentSession)
+        .then((blob) => {
+          // The vault may have locked while this was in flight.
+          if (options.session() !== currentSession) return null;
+          const url = URL.createObjectURL(blob);
+          previewObjectUrls.add(url);
+          return url;
+        })
+        .catch((previewError) => {
+          console.error("Preview load failed", previewError);
+          return null;
+        });
+      previewUrls.set(preview.id, pending);
+    }
+    return pending;
+  };
+
+  // Encrypts and uploads an image's thumbnail as its own one-chunk file.
+  // Thumbnails are optional, so any failure just means no preview.
+  const uploadPreview = async (
+    bytes: Uint8Array<ArrayBuffer>,
+    mimeType: string,
+    session: VaultSession,
+  ): Promise<VaultAttachmentPreview | undefined> => {
+    const previewId = createId();
+    try {
+      const manifest = await uploadAttachmentBytes(previewId, bytes, session);
+      return { id: previewId, mimeType, size: bytes.length, ...manifest };
+    } catch (previewError) {
+      console.error("Preview upload failed", previewError);
+      return undefined;
+    }
   };
 
   const cleanupAttachmentRemote = async (
@@ -97,9 +152,9 @@ export function createAttachmentController(options: AttachmentControllerOptions)
       return;
     }
     const cleanup = await Promise.all(
-      identity.attachments.map((attachment) =>
-        cleanupAttachmentRemote(attachment.id, authToken),
-      ),
+      identity.attachments
+        .flatMap(attachmentFileIds)
+        .map((fileId) => cleanupAttachmentRemote(fileId, authToken)),
     );
     if (cleanup.some((removed) => !removed)) {
       setAttachmentError(
@@ -129,28 +184,39 @@ export function createAttachmentController(options: AttachmentControllerOptions)
       }
 
       const fileId = createId();
+      let preview: VaultAttachmentPreview | undefined;
       setUploadProgress({ ...progressBase, percent: 0 });
       try {
         const bytes = new Uint8Array(await file.arrayBuffer());
-        const thumb = await createImageThumb(file);
         const envelope = await uploadAttachmentBytes(
           fileId,
           bytes,
           currentSession,
           (percent) => setUploadProgress({ ...progressBase, percent }),
         );
+        const previewBytes = await createImagePreview(file);
+        if (previewBytes) {
+          preview = await uploadPreview(
+            previewBytes,
+            ATTACHMENT_PREVIEW_MIME,
+            currentSession,
+          );
+        }
         const attachment: VaultAttachment = {
           id: fileId,
           name: file.name,
           mimeType: file.type || "application/octet-stream",
           size: file.size,
           ...envelope,
-          thumb,
+          thumb: "",
+          ...(preview ? { preview } : {}),
           createdAt: Date.now(),
         };
 
         if (!options.vault().identities.some((item) => item.id === identityId)) {
-          void cleanupAttachmentRemote(fileId, currentSession.authToken);
+          for (const id of attachmentFileIds(attachment)) {
+            void cleanupAttachmentRemote(id, currentSession.authToken);
+          }
           setAttachmentError("The identity no longer exists.");
           break;
         }
@@ -169,6 +235,9 @@ export function createAttachmentController(options: AttachmentControllerOptions)
       } catch (uploadError) {
         console.error(uploadError);
         void cleanupAttachmentRemote(fileId, currentSession.authToken);
+        if (preview) {
+          void cleanupAttachmentRemote(preview.id, currentSession.authToken);
+        }
         setAttachmentError(
           uploadError instanceof Error
             ? `Upload of "${file.name}" failed: ${uploadError.message}`
@@ -276,17 +345,88 @@ export function createAttachmentController(options: AttachmentControllerOptions)
       );
       return;
     }
-    await cleanupAttachmentRemote(attachment.id, authToken, true);
+    for (const fileId of attachmentFileIds(attachment)) {
+      await cleanupAttachmentRemote(fileId, authToken, true);
+    }
+  };
+
+  // Moves thumbnails that older releases stored inline in the vault envelope
+  // into their own encrypted preview files, one at a time. Each one lands
+  // through a normal vault edit, so the usual debounced save shrinks the
+  // envelope. `isCurrent` stops the work when the vault locks or maintenance
+  // starts; anything uploaded but not saved is collected by the orphan sweep.
+  const migrateInlineThumbnails = async (isCurrent: () => boolean) => {
+    const currentSession = options.session();
+    if (!currentSession) return { moved: 0, failed: 0 };
+    const pending = options
+      .vault()
+      .identities.flatMap((identity) =>
+        identity.attachments
+          .filter((attachment) => attachment.thumb && !attachment.preview)
+          .map((attachment) => ({ identityId: identity.id, attachment })),
+      );
+    let moved = 0;
+    let failed = 0;
+    for (const { identityId, attachment } of pending) {
+      if (!isCurrent()) break;
+      const decoded = inlineThumbToBytes(attachment.thumb);
+      const preview = decoded
+        ? await uploadPreview(decoded.bytes, decoded.mimeType, currentSession)
+        : undefined;
+      if (decoded && !preview) {
+        failed += 1;
+        continue;
+      }
+      if (!isCurrent()) {
+        if (preview) {
+          void cleanupAttachmentRemote(preview.id, currentSession.authToken);
+        }
+        break;
+      }
+      let applied = false;
+      options.setVault((vault) => ({
+        ...vault,
+        identities: vault.identities.map((identity) =>
+          identity.id !== identityId
+            ? identity
+            : {
+                ...identity,
+                attachments: identity.attachments.map((existing) => {
+                  if (
+                    existing.id !== attachment.id ||
+                    existing.thumb !== attachment.thumb ||
+                    existing.preview
+                  ) {
+                    return existing;
+                  }
+                  applied = true;
+                  // An inline thumb that is not a valid image data URL is
+                  // dropped; it could never have rendered.
+                  return { ...existing, thumb: "", ...(preview ? { preview } : {}) };
+                }),
+              },
+        ),
+      }));
+      if (!applied && preview) {
+        void cleanupAttachmentRemote(preview.id, currentSession.authToken);
+      }
+      if (applied) moved += 1;
+    }
+    return { moved, failed };
   };
 
   const resetAttachments = () => {
     closeAttachmentPreview();
+    clearPreviewUrls();
     setUploadProgress(null);
     setAttachmentError("");
     setAttachmentBusyId("");
   };
 
-  onCleanup(() => closeAttachmentPreview());
+  onCleanup(() => {
+    closeAttachmentPreview();
+    clearPreviewUrls();
+  });
 
   return {
     uploadProgress,
@@ -300,6 +440,8 @@ export function createAttachmentController(options: AttachmentControllerOptions)
     handleOpenAttachment,
     handleDownloadAttachment,
     handleDeleteAttachment,
+    loadPreviewUrl,
+    migrateInlineThumbnails,
     resetAttachments,
   };
 }

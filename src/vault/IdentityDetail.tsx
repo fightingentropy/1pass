@@ -43,6 +43,7 @@ type IdentityDetailProps = {
   onOpenAttachment: (attachment: VaultAttachment) => void;
   onDownloadAttachment: (attachment: VaultAttachment) => void;
   onDeleteAttachment: (attachment: VaultAttachment) => void;
+  onLoadPreview: (attachment: VaultAttachment) => Promise<string | null>;
   onAddCredential: () => void;
   onEditCredential: (credential: VaultCredential) => void;
   onDeleteCredential: (credential: VaultCredential) => void;
@@ -83,6 +84,58 @@ function CopyableFields(props: {
         }}
       </For>
     </div>
+  );
+}
+
+function AttachmentGlyph(props: { attachment: VaultAttachment }) {
+  return (
+    <span class="attachment-glyph">
+      <Show
+        when={isPdfAttachment(props.attachment)}
+        fallback={
+          <Show when={isImageAttachment(props.attachment)} fallback={<FileIcon />}>
+            <ImageIcon />
+          </Show>
+        }
+      >
+        <span class="attachment-badge">PDF</span>
+      </Show>
+    </span>
+  );
+}
+
+// Shows an inline thumbnail from an older release directly, otherwise decrypts
+// the attachment's separately stored preview on demand.
+function AttachmentThumb(props: {
+  attachment: VaultAttachment;
+  onLoadPreview: (attachment: VaultAttachment) => Promise<string | null>;
+}) {
+  const [src, setSrc] = createSignal("");
+  createEffect(
+    on(
+      () => [props.attachment.thumb, props.attachment.preview?.id] as const,
+      () => {
+        const attachment = props.attachment;
+        if (attachment.thumb) {
+          setSrc(attachment.thumb);
+          return;
+        }
+        setSrc("");
+        if (!attachment.preview) return;
+        let cancelled = false;
+        void props.onLoadPreview(attachment).then((url) => {
+          if (!cancelled) setSrc(url ?? "");
+        });
+        onCleanup(() => {
+          cancelled = true;
+        });
+      },
+    ),
+  );
+  return (
+    <Show when={src()} fallback={<AttachmentGlyph attachment={props.attachment} />}>
+      <img src={src()} alt={props.attachment.name} loading="lazy" />
+    </Show>
   );
 }
 
@@ -213,11 +266,12 @@ export default function IdentityDetail(props: IdentityDetailProps) {
           <span class="detail-emblem identity-emblem" aria-hidden="true">
             {identityInitials(props.identity)}
           </span>
-          <span class="detail-kicker">Identity</span>
           <h2>
             {props.identity.firstName} {props.identity.lastName}
           </h2>
-          <p class="muted">{props.identity.email || "Personal vault"}</p>
+          <Show when={props.identity.email}>
+            <p class="muted">{props.identity.email}</p>
+          </Show>
         </div>
         <ItemActions
           itemId={props.identity.id}
@@ -285,7 +339,7 @@ export default function IdentityDetail(props: IdentityDetailProps) {
           when={props.identity.credentials.length > 0}
           fallback={
             <p class="attachments-empty">
-              No logins yet. Add a password for this identity.
+              No logins yet.
             </p>
           }
         >
@@ -498,7 +552,7 @@ export default function IdentityDetail(props: IdentityDetailProps) {
               when={props.identity.attachments.length > 0}
               fallback={
                 <p class="attachments-empty">
-                  Drop or paste photos and documents here, or choose Add.
+                  Drop or paste files here, or choose Add.
                 </p>
               }
             >
@@ -512,32 +566,10 @@ export default function IdentityDetail(props: IdentityDetailProps) {
                         title={`Open ${attachment.name}`}
                         onClick={() => props.onOpenAttachment(attachment)}
                       >
-                        <Show
-                          when={attachment.thumb}
-                          fallback={
-                            <span class="attachment-glyph">
-                              <Show
-                                when={isPdfAttachment(attachment)}
-                                fallback={
-                                  <Show
-                                    when={isImageAttachment(attachment)}
-                                    fallback={<FileIcon />}
-                                  >
-                                    <ImageIcon />
-                                  </Show>
-                                }
-                              >
-                                <span class="attachment-badge">PDF</span>
-                              </Show>
-                            </span>
-                          }
-                        >
-                          <img
-                            src={attachment.thumb}
-                            alt={attachment.name}
-                            loading="lazy"
-                          />
-                        </Show>
+                        <AttachmentThumb
+                          attachment={attachment}
+                          onLoadPreview={props.onLoadPreview}
+                        />
                         <Show when={props.attachmentBusyId === attachment.id}>
                           <span class="attachment-loading">
                             <span class="upload-spinner" aria-hidden="true" />

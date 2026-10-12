@@ -131,14 +131,6 @@ export function getFileBucket(env: Env) {
   return env.VAULT_FILES;
 }
 
-export function fileChunkKey(fileId: string, chunkIndex: number) {
-  return `vaults/${DEFAULT_VAULT_ID}/files/${fileId}/${chunkIndex}.json`;
-}
-
-export function filePrefix(fileId: string) {
-  return `vaults/${DEFAULT_VAULT_ID}/files/${fileId}/`;
-}
-
 export function stagedUploadPrefix(uploadId: string) {
   return `vaults/${DEFAULT_VAULT_ID}/staging/${uploadId}/`;
 }
@@ -161,35 +153,6 @@ export async function deleteObjectPrefix(
   } while (cursor);
 }
 
-export async function deleteFileObjects(
-  bucket: Env["VAULT_FILES"],
-  fileId: string,
-) {
-  await deleteObjectPrefix(bucket, filePrefix(fileId));
-}
-
-export async function ensureVaultTable(db: Env["DB"]) {
-  await db.prepare("SELECT auth_hash, revision FROM vaults LIMIT 1").first();
-}
-
-export async function ensureVaultHistoryTable(db: Env["DB"]) {
-  await db.prepare("SELECT vault_id FROM vault_history LIMIT 1").first();
-}
-
-export async function ensureVaultFilesTable(db: Env["DB"]) {
-  await db.prepare("SELECT id FROM vault_files LIMIT 1").first();
-}
-
-export async function ensureVaultFileUploadTables(db: Env["DB"]) {
-  await db.prepare("SELECT upload_id FROM vault_file_uploads LIMIT 1").first();
-  await db
-    .prepare("SELECT upload_id FROM vault_file_upload_chunks LIMIT 1")
-    .first();
-  await db
-    .prepare("SELECT upload_id FROM vault_file_manifests LIMIT 1")
-    .first();
-}
-
 type CollectableUpload = {
   upload_id: string;
   state: "staging" | "committed";
@@ -203,7 +166,6 @@ export async function garbageCollectAbandonedUploads(
   bucket: Env["VAULT_FILES"],
   now = Date.now(),
 ) {
-  await ensureVaultFileUploadTables(db);
   const candidates = await db
     .prepare(
       "SELECT upload_id, state FROM vault_file_uploads WHERE created_at < ?1 AND state IN ('staging', 'committed') AND NOT EXISTS (SELECT 1 FROM vault_file_manifests WHERE vault_file_manifests.upload_id = vault_file_uploads.upload_id AND vault_file_manifests.deleted_at IS NULL) ORDER BY created_at ASC LIMIT ?2",
@@ -247,12 +209,6 @@ export async function garbageCollectAbandonedUploads(
   return removed;
 }
 
-export async function ensureVaultAuthAttemptsTable(db: Env["DB"]) {
-  await db
-    .prepare("SELECT client_key FROM vault_auth_attempts LIMIT 1")
-    .first();
-}
-
 export function isValidFileId(value: unknown): value is string {
   return (
     typeof value === "string" &&
@@ -283,7 +239,6 @@ async function authFailureResponse(request: Request, env: Env) {
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
     "local";
   const db = getDb(env);
-  await ensureVaultAuthAttemptsTable(db);
   const now = Date.now();
   const windowCutoff = now - AUTH_FAILURE_WINDOW_MS;
   const clientKey = await sha256Hex(clientIdentity);
@@ -330,32 +285,47 @@ export async function checkBootstrapSecret(
     : authFailureResponse(request, env);
 }
 
-export async function getVaultAuthHash(db: Env["DB"]) {
-  const row = await db
-    .prepare("SELECT auth_hash FROM vaults WHERE id = ?1")
-    .bind(DEFAULT_VAULT_ID)
-    .first<{ auth_hash: string | null }>();
-  return row?.auth_hash ?? null;
-}
-
-// Returns null when the request may proceed, otherwise a ready 401 response.
-// Vaults created before the auth scheme have no auth_hash yet. They require the
-// deployment bootstrap secret for their one-time authenticated migration.
-export async function checkVaultAuth(
+// Returns null when the request may proceed, otherwise a ready 401/429
+// response. Every vault is created by init.ts with an auth_hash, so a missing
+// or empty stored hash means the row is damaged or was written outside the
+// API; it fails closed rather than accepting any other credential. The
+// bootstrap secret only gates creating a vault, never access to an existing one.
+// Callers that already hold the vault row pass its auth_hash here so the
+// credential check costs no additional D1 round trip.
+export async function authorizeVaultRequest(
   request: Request,
-  db: Env["DB"],
   env: Env,
+  storedAuthHash: string | null,
 ): Promise<Response | null> {
-  const stored = await getVaultAuthHash(db);
-  if (!stored) return checkBootstrapSecret(request, env);
+  if (!storedAuthHash) return authFailureResponse(request, env);
 
   const token = request.headers.get(VAULT_AUTH_HEADER) ?? "";
   if (!token || token.length > 256) {
     return authFailureResponse(request, env);
   }
   const hash = await sha256Hex(token);
-  if (!timingSafeEqualHash(hash, stored)) {
+  if (!timingSafeEqualHash(hash, storedAuthHash)) {
     return authFailureResponse(request, env);
   }
   return null;
+}
+
+// Reads the stored auth hash with one query and authorizes the request. With
+// `requireVault`, a missing vault row answers 404 before any credential check,
+// replacing the separate existence query callers used to run afterwards.
+// Without it, a missing row has no hash and is rejected like a bad credential.
+export async function checkVaultAuth(
+  request: Request,
+  db: Env["DB"],
+  env: Env,
+  options: { requireVault?: boolean } = {},
+): Promise<Response | null> {
+  const row = await db
+    .prepare("SELECT auth_hash FROM vaults WHERE id = ?1")
+    .bind(DEFAULT_VAULT_ID)
+    .first<{ auth_hash: string | null }>();
+  if (!row && options.requireVault) {
+    return errorResponse("Vault not initialized.", 404, env);
+  }
+  return authorizeVaultRequest(request, env, row?.auth_hash ?? null);
 }

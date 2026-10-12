@@ -3,7 +3,6 @@ import {
   DEFAULT_VAULT_ID,
   VAULT_AUTH_HEADER,
   checkBootstrapSecret,
-  ensureVaultTable,
   errorResponse,
   getDb,
   jsonResponse,
@@ -54,16 +53,17 @@ export async function onRequestPost({
     }
 
     const db = getDb(env);
-    await ensureVaultTable(db);
     const inserted = await db
       .prepare(
-        "INSERT OR IGNORE INTO vaults (id, payload, updated_at, auth_hash, revision) VALUES (?1, ?2, ?3, ?4, 0)",
+        "INSERT OR IGNORE INTO vaults (id, payload, updated_at, auth_hash, revision, envelope_version, kdf_json) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6)",
       )
       .bind(
         DEFAULT_VAULT_ID,
         payloadJson,
         Date.now(),
         await sha256Hex(authToken),
+        payload.version,
+        JSON.stringify(payload.kdf),
       )
       .run();
 

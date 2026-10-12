@@ -4,8 +4,6 @@ import {
   MAX_FILE_CHUNK_JSON_BYTES,
   checkVaultAuth,
   deleteObjectPrefix,
-  ensureVaultFileUploadTables,
-  ensureVaultTable,
   errorResponse,
   garbageCollectAbandonedUploads,
   getFileBucket,
@@ -86,7 +84,6 @@ async function beginUpload(body: unknown, env: Env) {
 
   const db = getDb(env);
   const bucket = getFileBucket(env);
-  await ensureVaultFileUploadTables(db);
   try {
     await garbageCollectAbandonedUploads(db, bucket);
   } catch (error) {
@@ -145,7 +142,6 @@ async function uploadChunk(body: unknown, env: Env) {
   }
 
   const db = getDb(env);
-  await ensureVaultFileUploadTables(db);
   const upload = await db
     .prepare(
       "SELECT upload_id, file_id, total_chunks, base_generation, state FROM vault_file_uploads WHERE upload_id = ?1 AND vault_id = ?2",
@@ -215,7 +211,6 @@ async function commitUpload(body: unknown, env: Env) {
   }
 
   const db = getDb(env);
-  await ensureVaultFileUploadTables(db);
   const upload = await db
     .prepare(
       "SELECT upload_id, file_id, total_chunks, base_generation, state FROM vault_file_uploads WHERE upload_id = ?1 AND vault_id = ?2",
@@ -338,7 +333,6 @@ async function abortUpload(body: unknown, env: Env) {
     return errorResponse("Invalid upload id.", 400, env);
   }
   const db = getDb(env);
-  await ensureVaultFileUploadTables(db);
   const claimed = await db
     .prepare(
       "UPDATE vault_file_uploads SET state = 'collecting' WHERE upload_id = ?1 AND vault_id = ?2 AND state = 'staging' AND NOT EXISTS (SELECT 1 FROM vault_file_manifests WHERE vault_file_manifests.upload_id = vault_file_uploads.upload_id AND vault_file_manifests.deleted_at IS NULL)",
@@ -386,8 +380,9 @@ export async function onRequestPost({
 }) {
   try {
     const db = getDb(env);
-    await ensureVaultTable(db);
-    const authFailure = await checkVaultAuth(request, db, env);
+    const authFailure = await checkVaultAuth(request, db, env, {
+      requireVault: true,
+    });
     if (authFailure) return authFailure;
 
     const parsedBody = await readBoundedJson(
@@ -399,14 +394,6 @@ export async function onRequestPost({
     }
     const body = parsedBody.value;
     const action = readField(body, "action");
-
-    const vault = await db
-      .prepare("SELECT id FROM vaults WHERE id = ?1")
-      .bind(DEFAULT_VAULT_ID)
-      .first();
-    if (!vault) {
-      return errorResponse("Vault not initialized.", 404, env);
-    }
 
     if (action === "begin") return beginUpload(body, env);
     if (action === "chunk") return uploadChunk(body, env);

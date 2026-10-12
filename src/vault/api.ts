@@ -4,6 +4,7 @@ import {
   type VaultAttachment,
   type VaultEncryptedPayload,
   type VaultMeta,
+  type VaultStoredFile,
 } from "../../functions/api/vault/schema";
 import {
   createV3AttachmentManifest,
@@ -16,6 +17,10 @@ import {
   type VaultSession,
   verifyV3AttachmentManifest,
 } from "../vaultCrypto";
+import {
+  ATTACHMENT_TRANSFER_CONCURRENCY,
+  runWithConcurrency,
+} from "./concurrency";
 import { ATTACHMENT_CHUNK_SIZE } from "./types";
 
 export class ApiError extends Error {
@@ -110,13 +115,10 @@ export async function initVault(
   return result.revision;
 }
 
-export async function loadVaultRecord(authToken: string, bootstrapSecret = "") {
+export async function loadVaultRecord(authToken: string) {
   return requestJson<{ payload: unknown; revision: number }>(
     "/api/vault/load",
-    {
-      authToken,
-      bootstrapSecret,
-    },
+    { authToken },
   );
 }
 
@@ -124,13 +126,11 @@ export async function saveVaultRecord(
   payload: VaultEncryptedPayload,
   authToken: string,
   expectedRevision: number,
-  bootstrapSecret = "",
 ) {
   const result = await requestJson<{ revision: number }>("/api/vault/save", {
     method: "POST",
     body: JSON.stringify({ payload, expectedRevision }),
     authToken,
-    bootstrapSecret,
   });
   return result.revision;
 }
@@ -247,22 +247,32 @@ export async function uploadAttachmentBytes(
     totalChunks,
     session.authToken,
   );
-  const chunkHashes: string[] = [];
-  const chunkSizes: number[] = [];
   try {
-    for (let index = 0; index < totalChunks; index += 1) {
-      const start = index * ATTACHMENT_CHUNK_SIZE;
-      const chunk = bytes.subarray(start, start + ATTACHMENT_CHUNK_SIZE);
-      const payload = await encryptBytes(chunk, session, {
-        fileId,
-        chunkIndex: index,
-        totalChunks,
-      });
-      await uploadEncryptedChunk(uploadId, index, payload, session.authToken);
-      chunkHashes.push(await encryptedChunkDigest(payload));
-      chunkSizes.push(chunk.length);
-      onProgress?.(Math.round(((index + 1) / totalChunks) * 100));
-    }
+    const chunkIndexes = Array.from({ length: totalChunks }, (_, i) => i);
+    let completed = 0;
+    const results = await runWithConcurrency(
+      chunkIndexes,
+      ATTACHMENT_TRANSFER_CONCURRENCY,
+      async (index) => {
+        const start = index * ATTACHMENT_CHUNK_SIZE;
+        const chunk = bytes.subarray(start, start + ATTACHMENT_CHUNK_SIZE);
+        const payload = await encryptBytes(chunk, session, {
+          fileId,
+          chunkIndex: index,
+          totalChunks,
+        });
+        await uploadEncryptedChunk(uploadId, index, payload, session.authToken);
+        const result = {
+          hash: await encryptedChunkDigest(payload),
+          size: chunk.length,
+        };
+        completed += 1;
+        onProgress?.(Math.round((completed / totalChunks) * 100));
+        return result;
+      },
+    );
+    const chunkHashes = results.map((result) => result.hash);
+    const chunkSizes = results.map((result) => result.size);
     const manifest = await createV3AttachmentManifest(
       session,
       fileId,
@@ -281,40 +291,38 @@ export async function uploadAttachmentBytes(
   }
 }
 
+// Live files are always v3: every chunk is checked against the
+// authenticated manifest before and after decryption.
 export async function downloadAttachmentChunks(
-  attachment: VaultAttachment,
+  file: VaultStoredFile,
   session: VaultSession,
 ): Promise<Uint8Array[]> {
-  const v3Manifest = hasV3AttachmentManifest(attachment) ? attachment : null;
-  if (attachment.envelopeVersion === 3 && !v3Manifest) {
+  if (!hasV3AttachmentManifest(file)) {
     throw new Error("The attachment manifest is missing or corrupted.");
   }
-  if (v3Manifest && !(await verifyV3AttachmentManifest(v3Manifest, session))) {
+  if (!(await verifyV3AttachmentManifest(file, session))) {
     throw new Error("The attachment manifest authentication failed.");
   }
-  const chunkIndexes = Array.from({ length: attachment.chunks }, (_, i) => i);
+  const chunkIndexes = Array.from({ length: file.chunks }, (_, i) => i);
   return Promise.all(
     chunkIndexes.map(async (index) => {
       const payload = await downloadAttachmentEncryptedChunk(
-        attachment.id,
+        file.id,
         index,
         session.authToken,
       );
-      if (v3Manifest) {
-        if (
-          payload.version !== 3 ||
-          (await encryptedChunkDigest(payload)) !==
-            v3Manifest.chunkHashes[index]
-        ) {
-          throw new Error("The attachment chunk manifest does not match.");
-        }
+      if (
+        payload.version !== 3 ||
+        (await encryptedChunkDigest(payload)) !== file.chunkHashes[index]
+      ) {
+        throw new Error("The attachment chunk manifest does not match.");
       }
       const plaintext = await decryptBytes(payload, session, {
-        fileId: attachment.id,
+        fileId: file.id,
         chunkIndex: index,
-        totalChunks: attachment.chunks,
+        totalChunks: file.chunks,
       });
-      if (v3Manifest && plaintext.length !== v3Manifest.chunkSizes[index]) {
+      if (plaintext.length !== file.chunkSizes[index]) {
         throw new Error("The attachment chunk size does not match.");
       }
       return plaintext;
@@ -323,7 +331,7 @@ export async function downloadAttachmentChunks(
 }
 
 export async function downloadAttachmentBlob(
-  attachment: VaultAttachment,
+  attachment: VaultStoredFile & { mimeType: string },
   session: VaultSession,
 ): Promise<Blob> {
   const parts = await downloadAttachmentChunks(attachment, session);
@@ -343,82 +351,32 @@ export async function deleteAttachmentRemote(
   });
 }
 
-// Fetches an attachment's encrypted chunks and returns the raw decrypted
-// bytes per chunk, trying the old session first and falling back to the new
-// one — used by the v1/v2→v3 migration so it stays idempotent if a previous
-// migration attempt was interrupted partway through.
-export async function migrateAttachmentEncryption(
-  attachment: VaultAttachment,
-  oldSession: VaultSession,
-  newSession: VaultSession,
-) {
-  if (newSession.version !== 3) {
-    throw new Error("Attachment migration requires a v3 vault session.");
-  }
-  const chunkIndexes = Array.from({ length: attachment.chunks }, (_, i) => i);
-  const uploadId = await beginAttachmentUpload(
-    attachment.id,
-    attachment.chunks,
-    newSession.authToken,
+function isRemoteAttachmentEntry(
+  value: unknown,
+): value is { id: string; committedAt: number } {
+  if (typeof value !== "object" || value === null) return false;
+  const { id, committedAt } = value as { id?: unknown; committedAt?: unknown };
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    typeof committedAt === "number" &&
+    Number.isFinite(committedAt)
   );
-  const chunkHashes: string[] = [];
-  const chunkSizes: number[] = [];
-  try {
-    for (const index of chunkIndexes) {
-      const payload = await downloadAttachmentEncryptedChunk(
-        attachment.id,
-        index,
-        newSession.authToken,
-      );
+}
 
-      let plainChunk: Uint8Array;
-      try {
-        plainChunk = await decryptBytes(payload, oldSession, {
-          fileId: attachment.id,
-          chunkIndex: index,
-          totalChunks: attachment.chunks,
-        });
-      } catch {
-        // Already re-encrypted by an earlier, interrupted migration run.
-        plainChunk = await decryptBytes(payload, newSession, {
-          fileId: attachment.id,
-          chunkIndex: index,
-          totalChunks: attachment.chunks,
-        });
-      }
-
-      const reencrypted = await encryptBytes(
-        plainChunk as Uint8Array<ArrayBuffer>,
-        newSession,
-        {
-          fileId: attachment.id,
-          chunkIndex: index,
-          totalChunks: attachment.chunks,
-        },
-      );
-      await uploadEncryptedChunk(
-        uploadId,
-        index,
-        reencrypted,
-        newSession.authToken,
-      );
-      chunkHashes.push(await encryptedChunkDigest(reencrypted));
-      chunkSizes.push(plainChunk.length);
-    }
-    const manifest = await createV3AttachmentManifest(
-      newSession,
-      attachment.id,
-      chunkHashes,
-      chunkSizes,
-    );
-    await commitAttachmentUpload(uploadId, manifest, newSession.authToken);
-    Object.assign(attachment, manifest);
-  } catch (error) {
-    try {
-      await abortAttachmentUpload(uploadId, newSession.authToken);
-    } catch (cleanupError) {
-      console.error("Staged migration cleanup failed", cleanupError);
-    }
-    throw error;
+// Every live manifest-tracked file on the server, oldest commit first. The
+// server cannot tell which of these the encrypted vault still references, so
+// the caller diffs this against the decrypted attachment ids.
+export async function listRemoteAttachments(
+  authToken: string,
+): Promise<{ id: string; committedAt: number }[]> {
+  const data = await requestJson<{ files?: unknown } | null>(
+    "/api/vault/files/list",
+    { authToken },
+  );
+  const files = data?.files;
+  if (!Array.isArray(files) || !files.every(isRemoteAttachmentEntry)) {
+    throw new Error("The file list response is invalid.");
   }
+  return files.map(({ id, committedAt }) => ({ id, committedAt }));
 }

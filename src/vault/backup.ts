@@ -1,8 +1,8 @@
 import {
   isVaultEncryptedPayload,
-  type VaultAttachment,
   type VaultEncryptedPayload,
   type VaultPayload,
+  type VaultStoredFile,
 } from "../../functions/api/vault/schema";
 import {
   decryptVaultPayload,
@@ -15,7 +15,11 @@ import {
   type VaultSession,
   verifyV3AttachmentManifest,
 } from "../vaultCrypto";
-import { normalizeVault } from "./types";
+import {
+  ATTACHMENT_TRANSFER_CONCURRENCY,
+  runWithConcurrency,
+} from "./concurrency";
+import { attachmentFileIds, normalizeVault } from "./types";
 
 export const VAULT_BACKUP_APP = "1pass-vault-backup";
 export const VAULT_BACKUP_VERSION = 2;
@@ -88,12 +92,17 @@ export function parseVaultBackup(value: unknown): VaultBackup {
   };
 }
 
+// Collects the encrypted chunks of every attachment and preview. The chunks
+// are copied as stored, so the backup decrypts only with this vault's
+// password. An unreadable preview is left out and unlinked from the backed-up
+// vault rather than failing the whole backup.
 export async function createVaultBackup(
   vault: VaultPayload,
   session: VaultSession,
   readChunk: (
-    attachment: VaultAttachment,
+    file: VaultStoredFile,
     chunkIndex: number,
+    label: string,
   ) => Promise<EncryptedChunk>,
   onProgress?: (label: string) => void,
 ): Promise<VaultBackup> {
@@ -101,39 +110,89 @@ export async function createVaultBackup(
     (identity) => identity.attachments,
   );
   const attachments: VaultBackupAttachment[] = [];
-  for (const [fileIndex, attachment] of allAttachments.entries()) {
-    const manifest = hasV3AttachmentManifest(attachment) ? attachment : null;
-    if (attachment.envelopeVersion === 3 && !manifest) {
-      throw new Error(`The manifest for "${attachment.name}" is invalid.`);
+  const droppedPreviewIds = new Set<string>();
+
+  const readFile = async (
+    file: VaultStoredFile,
+    label: string,
+    onChunk?: (done: number) => void,
+  ) => {
+    const manifest = hasV3AttachmentManifest(file) ? file : null;
+    if (file.envelopeVersion === 3 && !manifest) {
+      throw new Error(`The manifest for "${label}" is invalid.`);
     }
     if (manifest && !(await verifyV3AttachmentManifest(manifest, session))) {
-      throw new Error(
-        `The manifest for "${attachment.name}" failed authentication.`,
-      );
+      throw new Error(`The manifest for "${label}" failed authentication.`);
     }
-    const chunks: EncryptedChunk[] = [];
-    for (let index = 0; index < attachment.chunks; index += 1) {
+    const chunkIndexes = Array.from({ length: file.chunks }, (_, i) => i);
+    let done = 0;
+    return runWithConcurrency(
+      chunkIndexes,
+      ATTACHMENT_TRANSFER_CONCURRENCY,
+      async (index) => {
+        const chunk = await readChunk(file, index, label);
+        if (
+          manifest &&
+          (chunk.version !== 3 ||
+            (await encryptedChunkDigest(chunk)) !== manifest.chunkHashes[index])
+        ) {
+          throw new Error(`A chunk for "${label}" was altered.`);
+        }
+        done += 1;
+        onChunk?.(done);
+        return chunk;
+      },
+    );
+  };
+
+  for (const [fileIndex, attachment] of allAttachments.entries()) {
+    const position = `${fileIndex + 1}/${allAttachments.length}`;
+    onProgress?.(`Backing up files (${position})…`);
+    const chunks = await readFile(attachment, attachment.name, (done) =>
       onProgress?.(
-        `Backing up files (${fileIndex + 1}/${allAttachments.length}, chunk ${index + 1}/${attachment.chunks})…`,
-      );
-      const chunk = await readChunk(attachment, index);
-      if (
-        manifest &&
-        (chunk.version !== 3 ||
-          (await encryptedChunkDigest(chunk)) !== manifest.chunkHashes[index])
-      ) {
-        throw new Error(`A chunk for "${attachment.name}" was altered.`);
-      }
-      chunks.push(chunk);
-    }
+        `Backing up files (${position}, chunk ${done}/${attachment.chunks})…`,
+      ),
+    );
     attachments.push({ id: attachment.id, chunks });
+    if (attachment.preview) {
+      try {
+        const previewChunks = await readFile(
+          attachment.preview,
+          `${attachment.name} preview`,
+        );
+        attachments.push({ id: attachment.preview.id, chunks: previewChunks });
+      } catch (previewError) {
+        console.error(
+          `Left the preview of "${attachment.name}" out of the backup`,
+          previewError,
+        );
+        droppedPreviewIds.add(attachment.preview.id);
+      }
+    }
   }
+
+  const backedUpVault: VaultPayload =
+    droppedPreviewIds.size === 0
+      ? vault
+      : {
+          ...vault,
+          identities: vault.identities.map((identity) => ({
+            ...identity,
+            attachments: identity.attachments.map((attachment) => {
+              if (!attachment.preview || !droppedPreviewIds.has(attachment.preview.id)) {
+                return attachment;
+              }
+              const { preview: _dropped, ...rest } = attachment;
+              return rest;
+            }),
+          })),
+        };
 
   return {
     app: VAULT_BACKUP_APP,
     version: VAULT_BACKUP_VERSION,
     exportedAt: new Date().toISOString(),
-    payload: await encryptVaultPayload(vault, session),
+    payload: await encryptVaultPayload(backedUpVault, session),
     attachments,
   };
 }
@@ -160,6 +219,8 @@ export async function decryptVaultBackup(
   const attachments = new Map(
     backup.attachments.map((attachment) => [attachment.id, attachment.chunks]),
   );
+  // Every attachment's data must be present. A preview's data is optional:
+  // restore drops a preview it cannot read instead of failing.
   const referencedIds = new Set<string>();
   for (const attachment of vault.identities.flatMap(
     (identity) => identity.attachments,
@@ -172,14 +233,16 @@ export async function decryptVaultBackup(
         `The manifest for "${attachment.name}" failed authentication.`,
       );
     }
-    referencedIds.add(attachment.id);
+    for (const id of attachmentFileIds(attachment)) referencedIds.add(id);
     const chunks = attachments.get(attachment.id);
     if (!chunks || chunks.length !== attachment.chunks) {
       throw new Error(`The backup is missing data for "${attachment.name}".`);
     }
   }
-  if (attachments.size !== referencedIds.size) {
-    throw new Error("The backup contains unreferenced attachment data.");
+  for (const id of attachments.keys()) {
+    if (!referencedIds.has(id)) {
+      throw new Error("The backup contains unreferenced attachment data.");
+    }
   }
   return { vault, session, attachments };
 }

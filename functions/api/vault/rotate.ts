@@ -1,9 +1,7 @@
 import { isVaultEncryptedPayload } from "./schema";
 import {
   DEFAULT_VAULT_ID,
-  checkVaultAuth,
-  ensureVaultHistoryTable,
-  ensureVaultTable,
+  authorizeVaultRequest,
   errorResponse,
   getDb,
   jsonResponse,
@@ -27,8 +25,20 @@ export async function onRequestPost({
 }) {
   try {
     const db = getDb(env);
-    await ensureVaultTable(db);
-    const authFailure = await checkVaultAuth(request, db, env);
+    // One read serves both the credential check and the revision compare. The
+    // body is only consumed once the caller has proven it may write.
+    const existing = await db
+      .prepare("SELECT auth_hash, revision FROM vaults WHERE id = ?1")
+      .bind(DEFAULT_VAULT_ID)
+      .first<{ auth_hash: string | null; revision: number }>();
+    if (!existing) {
+      return errorResponse("Vault not initialized.", 404, env);
+    }
+    const authFailure = await authorizeVaultRequest(
+      request,
+      env,
+      existing.auth_hash,
+    );
     if (authFailure) return authFailure;
 
     const parsedBody = await readBoundedJson(request, 1_950_000);
@@ -72,13 +82,6 @@ export async function onRequestPost({
       return errorResponse("Vault payload too large.", 413, env);
     }
 
-    const existing = await db
-      .prepare("SELECT revision FROM vaults WHERE id = ?1")
-      .bind(DEFAULT_VAULT_ID)
-      .first<{ revision: number }>();
-    if (!existing) {
-      return errorResponse("Vault not initialized.", 404, env);
-    }
     if (existing.revision !== expectedRevision) {
       return errorResponse(
         "Vault changed in another tab or device. Reload before changing the password.",
@@ -90,13 +93,12 @@ export async function onRequestPost({
     const savedAt = Date.now();
     const nextRevision = expectedRevision + 1;
     const nextAuthHash = await sha256Hex(newAuthToken);
-    await ensureVaultHistoryTable(db);
     // Do not retain snapshots encrypted with the old password. Rotation swaps
     // the live envelope and clears old-key history in one D1 transaction.
     const results = await db.batch([
       db
         .prepare(
-          "UPDATE vaults SET payload = ?1, updated_at = ?2, auth_hash = ?3, revision = ?4 WHERE id = ?5 AND revision = ?6",
+          "UPDATE vaults SET payload = ?1, updated_at = ?2, auth_hash = ?3, revision = ?4, envelope_version = ?7, kdf_json = ?8 WHERE id = ?5 AND revision = ?6",
         )
         .bind(
           payloadJson,
@@ -105,6 +107,8 @@ export async function onRequestPost({
           nextRevision,
           DEFAULT_VAULT_ID,
           expectedRevision,
+          payload.version,
+          JSON.stringify(payload.kdf),
         ),
       db
         .prepare("DELETE FROM vault_history WHERE vault_id = ?1")

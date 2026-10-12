@@ -12,7 +12,7 @@ import { trapFocus } from "./focus";
 
 type ModalShellProps = {
   title: string;
-  description: string;
+  description?: string;
   error: string;
   submitLabel: string;
   onSubmit: () => void;
@@ -46,7 +46,9 @@ export function ModalShell(props: ModalShellProps) {
         <div class="modal-header">
           <div>
             <h2 id={titleId}>{props.title}</h2>
-            <p class="muted">{props.description}</p>
+            <Show when={props.description}>
+              <p class="muted">{props.description}</p>
+            </Show>
           </div>
           <button
             class="icon-button icon-only"
@@ -103,7 +105,6 @@ export function IdentityModal(props: IdentityModalProps) {
   return (
     <ModalShell
       title={props.isEditing ? "Edit identity" : "Create identity"}
-      description="Personal details, kept together and kept private."
       error={props.error}
       submitLabel={props.isEditing ? "Save changes" : "Save identity"}
       onSubmit={props.onSubmit}
@@ -247,7 +248,6 @@ export function ApiKeyModal(props: ApiKeyModalProps) {
   return (
     <ModalShell
       title={props.isEditing ? "Edit API key" : "Create API key"}
-      description="Keep a service key safely in your personal vault."
       error={props.error}
       submitLabel={props.isEditing ? "Save changes" : "Save API key"}
       onSubmit={props.onSubmit}
@@ -331,7 +331,6 @@ export function CredentialModal(props: CredentialModalProps) {
   return (
     <ModalShell
       title={props.isEditing ? "Edit password" : "Add password"}
-      description="Save a login for this identity."
       error={props.error}
       submitLabel={props.isEditing ? "Save changes" : "Save password"}
       onSubmit={props.onSubmit}

@@ -2,10 +2,6 @@ import {
   DEFAULT_VAULT_ID,
   checkVaultAuth,
   deleteObjectPrefix,
-  deleteFileObjects,
-  ensureVaultFileUploadTables,
-  ensureVaultFilesTable,
-  ensureVaultTable,
   errorResponse,
   getFileBucket,
   getDb,
@@ -31,8 +27,9 @@ export async function onRequestPost({
 }) {
   try {
     const db = getDb(env);
-    await ensureVaultTable(db);
-    const authFailure = await checkVaultAuth(request, db, env);
+    const authFailure = await checkVaultAuth(request, db, env, {
+      requireVault: true,
+    });
     if (authFailure) return authFailure;
 
     const parsedBody = await readBoundedJson(request, 2_048);
@@ -47,7 +44,6 @@ export async function onRequestPost({
     }
 
     const bucket = getFileBucket(env);
-    await ensureVaultFileUploadTables(db);
     const active = await db
       .prepare(
         "SELECT upload_id FROM vault_file_manifests WHERE vault_id = ?1 AND file_id = ?2 AND deleted_at IS NULL",
@@ -89,12 +85,6 @@ export async function onRequestPost({
         logError("Deleted attachment object cleanup deferred", error);
       }
     }
-
-    // Also remove the pre-v3 direct-key representation during rolling
-    // upgrades. It is not used after an immutable manifest is committed.
-    await deleteFileObjects(bucket, id);
-    await ensureVaultFilesTable(db);
-    await db.prepare("DELETE FROM vault_files WHERE id = ?1").bind(id).run();
 
     return jsonResponse({ ok: true, cleanupDeferred }, env);
   } catch (error) {

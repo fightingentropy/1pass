@@ -1,18 +1,14 @@
 import { isVaultEncryptedPayload } from "./schema";
 import {
   DEFAULT_VAULT_ID,
-  VAULT_AUTH_HEADER,
   VAULT_HISTORY_LIMIT,
-  checkVaultAuth,
-  ensureVaultTable,
-  ensureVaultHistoryTable,
+  authorizeVaultRequest,
   errorResponse,
   getDb,
   jsonResponse,
   logError,
   optionsResponse,
   readBoundedJson,
-  sha256Hex,
 } from "./shared";
 import type { Env } from "./shared";
 
@@ -29,8 +25,20 @@ export async function onRequestPost({
 }) {
   try {
     const db = getDb(env);
-    await ensureVaultTable(db);
-    const authFailure = await checkVaultAuth(request, db, env);
+    // One read serves both the credential check and the revision compare. The
+    // body is only consumed once the caller has proven it may write.
+    const existing = await db
+      .prepare("SELECT auth_hash, revision FROM vaults WHERE id = ?1")
+      .bind(DEFAULT_VAULT_ID)
+      .first<{ auth_hash: string | null; revision: number }>();
+    if (!existing) {
+      return errorResponse("Vault not initialized.", 404, env);
+    }
+    const authFailure = await authorizeVaultRequest(
+      request,
+      env,
+      existing.auth_hash,
+    );
     if (authFailure) return authFailure;
 
     const parsedBody = await readBoundedJson(request, 1_950_000);
@@ -61,20 +69,12 @@ export async function onRequestPost({
     const payloadJson = JSON.stringify(payload);
     if (payloadJson.length > 1_900_000) {
       return errorResponse(
-        "Vault payload too large. Remove some attachments' thumbnails or notes.",
+        "Vault payload too large.",
         413,
         env,
       );
     }
 
-    const existing = await db
-      .prepare("SELECT auth_hash, revision FROM vaults WHERE id = ?1")
-      .bind(DEFAULT_VAULT_ID)
-      .first<{ auth_hash: string | null; revision: number }>();
-
-    if (!existing) {
-      return errorResponse("Vault not initialized.", 404, env);
-    }
     if (existing.revision !== expectedRevision) {
       return errorResponse(
         "Vault changed in another tab or device. Reload before saving again.",
@@ -83,17 +83,8 @@ export async function onRequestPost({
       );
     }
 
-    // A vault that predates the auth scheme registers the client's token on
-    // its first save; from then on every mutation requires it.
-    const incomingToken = request.headers.get(VAULT_AUTH_HEADER) ?? "";
-    const nextAuthHash =
-      !existing.auth_hash && incomingToken && incomingToken.length <= 256
-        ? await sha256Hex(incomingToken)
-        : existing.auth_hash;
-
     const savedAt = Date.now();
     const nextRevision = expectedRevision + 1;
-    await ensureVaultHistoryTable(db);
     const results = await db.batch([
       db
         .prepare(
@@ -102,15 +93,17 @@ export async function onRequestPost({
         .bind(savedAt, DEFAULT_VAULT_ID, expectedRevision),
       db
         .prepare(
-          "UPDATE vaults SET payload = ?1, updated_at = ?2, auth_hash = ?3, revision = ?4 WHERE id = ?5 AND revision = ?6",
+          "UPDATE vaults SET payload = ?1, updated_at = ?2, auth_hash = ?3, revision = ?4, envelope_version = ?7, kdf_json = ?8 WHERE id = ?5 AND revision = ?6",
         )
         .bind(
           payloadJson,
           savedAt,
-          nextAuthHash,
+          existing.auth_hash,
           nextRevision,
           DEFAULT_VAULT_ID,
           expectedRevision,
+          payload.version,
+          JSON.stringify(payload.kdf),
         ),
       db
         .prepare(

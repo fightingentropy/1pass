@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "build:local": "vite build",
     "preview": "vite preview",
     "cli": "bun run cli/vault-cli.ts",
     "test": "bun run test:crypto && bun run test:maintenance && bun run test:worker && bun run test:cli",
@@ -18,7 +17,7 @@
     "check": "bun run typecheck && bun run test && bun run build",
     "cf:types": "wrangler types worker-configuration.d.ts --env production --env-file /dev/null --env-interface CloudflareEnv --include-runtime false",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
-    "pages-dev": "bun run build:local && wrangler pages dev",
+    "pages-dev": "bun run build && wrangler pages dev",
     "deploy:vault": "wrangler pages deploy dist --project-name 1pass --branch main"
   },
   "dependencies": {

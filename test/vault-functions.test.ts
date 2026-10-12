@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { onRequestPost as initializeVault } from "../functions/api/vault/init";
 import { onRequestGet as loadVault } from "../functions/api/vault/load";
 import { onRequestPost as rotateVault } from "../functions/api/vault/rotate";
@@ -10,7 +10,6 @@ import { onRequestPost as uploadFile } from "../functions/api/vault/files/upload
 import type { VaultEncryptedPayload } from "../functions/api/vault/schema";
 import {
   STAGED_UPLOAD_MAX_AGE_MS,
-  fileChunkKey,
   sha256Hex,
   stagedChunkKey,
   type Env,
@@ -43,7 +42,35 @@ function postRequest(
   });
 }
 
+const encryptedChunk = {
+  version: 3 as const,
+  iv: "AAAAAAAAAAAAAAAA",
+  ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==",
+};
+const secondEncryptedChunk = {
+  version: 3 as const,
+  iv: "AQEBAQEBAQEBAQEB",
+  ciphertext: "AQEBAQEBAQEBAQEBAQEBAQ==",
+};
+const serializedChunk = JSON.stringify(encryptedChunk);
+const serializedSecondChunk = JSON.stringify(secondEncryptedChunk);
+const manifestMac = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+// The blocks below run in order against one D1 database and R2 bucket, so each
+// builds on the vault state the previous blocks left behind.
 describe("vault Pages Functions", () => {
+  let chunkHash: string;
+  let secondChunkHash: string;
+  // The committed two-chunk upload behind "r2-file", read back by the tamper check.
+  let uploadId: string;
+  // The upload that replaces "r2-file" after its first delete.
+  let replacementUploadId: string;
+
+  beforeAll(async () => {
+    chunkHash = await sha256Hex(serializedChunk);
+    secondChunkHash = await sha256Hex(serializedSecondChunk);
+  });
+
   it("guards initialization and rejects stale saves", async () => {
     const denied = await initializeVault({
       env: testEnv,
@@ -146,23 +173,9 @@ describe("vault Pages Functions", () => {
       ),
     });
     expect(stale.status).toBe(409);
+  });
 
-    const encryptedChunk = {
-      version: 3 as const,
-      iv: "AAAAAAAAAAAAAAAA",
-      ciphertext: "AAAAAAAAAAAAAAAAAAAAAA==",
-    };
-    const secondEncryptedChunk = {
-      version: 3 as const,
-      iv: "AQEBAQEBAQEBAQEB",
-      ciphertext: "AQEBAQEBAQEBAQEBAQEBAQ==",
-    };
-    const serializedChunk = JSON.stringify(encryptedChunk);
-    const serializedSecondChunk = JSON.stringify(secondEncryptedChunk);
-    const chunkHash = await sha256Hex(serializedChunk);
-    const secondChunkHash = await sha256Hex(serializedSecondChunk);
-    const manifestMac = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-
+  it("stages chunks and commits an immutable manifest", async () => {
     const began = await uploadFile({
       env: testEnv,
       request: postRequest(
@@ -172,7 +185,7 @@ describe("vault Pages Functions", () => {
       ),
     });
     expect(began.status).toBe(200);
-    const { uploadId } = (await began.json()) as { uploadId: string };
+    ({ uploadId } = (await began.json()) as { uploadId: string });
 
     const uploaded = await uploadFile({
       env: testEnv,
@@ -325,7 +338,9 @@ describe("vault Pages Functions", () => {
     await expect(downloadedSecond.json()).resolves.toEqual({
       payload: secondEncryptedChunk,
     });
+  });
 
+  it("detects a tampered chunk on read", async () => {
     // A storage-layer overwrite with another valid ciphertext is detected by
     // the committed ordered hash before data reaches the decryptor.
     await testEnv.VAULT_FILES.put(
@@ -341,7 +356,9 @@ describe("vault Pages Functions", () => {
     });
     expect(substituted.status).toBe(500);
     await testEnv.VAULT_FILES.put(stagedChunkKey(uploadId, 0), serializedChunk);
+  });
 
+  it("lets exactly one concurrent commit win", async () => {
     // Two immutable sessions can stage concurrently, but their shared base
     // generation allows exactly one manifest pointer to commit.
     const raceBeginA = await uploadFile({
@@ -428,7 +445,9 @@ describe("vault Pages Functions", () => {
       upload_id: raceUploadA,
       generation: 1,
     });
+  });
 
+  it("deletes an attachment and commits a replacement", async () => {
     const deletedRace = await deleteFile({
       env: testEnv,
       request: postRequest(
@@ -447,7 +466,7 @@ describe("vault Pages Functions", () => {
         { "x-vault-auth": authToken },
       ),
     });
-    const replacementUploadId = (
+    replacementUploadId = (
       (await replacementBegin.json()) as { uploadId: string }
     ).uploadId;
     const replacementChunk = await uploadFile({
@@ -496,7 +515,9 @@ describe("vault Pages Functions", () => {
     await expect(replacementDownload.json()).resolves.toEqual({
       payload: secondEncryptedChunk,
     });
+  });
 
+  it("rejects a stale session after delete and allows abort", async () => {
     const staleBegin = await uploadFile({
       env: testEnv,
       request: postRequest(
@@ -571,7 +592,9 @@ describe("vault Pages Functions", () => {
       ),
     });
     expect(abortedStale.status).toBe(200);
+  });
 
+  it("garbage-collects abandoned uploads", async () => {
     const abandonedUploadId = "abandoned-upload-session";
     await testEnv.DB.prepare(
       "INSERT INTO vault_file_uploads (upload_id, vault_id, file_id, total_chunks, base_generation, state, created_at) VALUES (?1, 'default', 'abandoned-file', 1, 0, 'staging', ?2)",
@@ -600,30 +623,28 @@ describe("vault Pages Functions", () => {
       .bind(abandonedUploadId)
       .first();
     expect(abandonedRow).toBeNull();
+  });
 
-    await testEnv.DB.prepare(
-      "INSERT INTO vault_files (id, chunk_index, payload, created_at) VALUES (?1, 0, ?2, ?3)",
-    )
-      .bind("legacy-file", JSON.stringify(encryptedChunk), Date.now())
-      .run();
-    const migrated = await getFile({
+  it("serves attachments only through committed manifests", async () => {
+    // An object at the retired direct-key R2 layout is never read back.
+    await testEnv.VAULT_FILES.put(
+      "vaults/default/files/unmanifested-file/0.json",
+      serializedChunk,
+    );
+    const unmanifested = await getFile({
       env: testEnv,
       request: new Request(
-        "https://vault.test/api/vault/files/get?id=legacy-file&chunk=0",
+        "https://vault.test/api/vault/files/get?id=unmanifested-file&chunk=0",
         { headers: { "x-vault-auth": authToken } },
       ),
     });
-    expect(migrated.status).toBe(200);
-    expect(
-      await testEnv.VAULT_FILES.head(fileChunkKey("legacy-file", 0)),
-    ).not.toBeNull();
-    const legacyRow = await testEnv.DB.prepare(
-      "SELECT payload FROM vault_files WHERE id = ?1 AND chunk_index = 0",
-    )
-      .bind("legacy-file")
-      .first();
-    expect(legacyRow).toBeNull();
+    expect(unmanifested.status).toBe(404);
+    await expect(unmanifested.json()).resolves.toEqual({
+      error: "File chunk not found.",
+    });
+  });
 
+  it("rotates the password and retires the old credentials", async () => {
     const replacementToken =
       "replacement-auth-token-with-more-than-32-characters";
     const rotated = await rotateVault({
@@ -665,7 +686,9 @@ describe("vault Pages Functions", () => {
       "SELECT COUNT(*) AS count FROM vault_history WHERE vault_id = 'default'",
     ).first<{ count: number }>();
     expect(history?.count).toBe(0);
+  });
 
+  it("rate limits repeated authentication failures", async () => {
     await testEnv.DB.prepare("DELETE FROM vault_auth_attempts").run();
     for (let attempt = 0; attempt < 60; attempt += 1) {
       const rejected = await loadVault({

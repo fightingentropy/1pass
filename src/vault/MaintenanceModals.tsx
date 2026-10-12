@@ -23,7 +23,7 @@ export function ChangePasswordModal(props: ChangePasswordModalProps) {
   return (
     <ModalShell
       title="Change master password"
-      description="Every vault record and attachment will be re-encrypted. Keep this tab open until it finishes."
+      description="Every record and attachment is re-encrypted. Keep this tab open until it finishes."
       error={props.error}
       submitLabel="Change password"
       onSubmit={props.onSubmit}
@@ -97,7 +97,7 @@ export function ImportBackupModal(props: ImportBackupModalProps) {
   return (
     <ModalShell
       title="Import encrypted backup"
-      description={`Restore ${props.fileName}. This replaces the current vault only after every attachment is safely staged.`}
+      description={`Replaces the current vault with ${props.fileName}. A failed restore leaves it unchanged.`}
       error={props.error}
       submitLabel="Restore backup"
       onSubmit={props.onSubmit}
@@ -125,9 +125,6 @@ export function ImportBackupModal(props: ImportBackupModalProps) {
           </button>
         </div>
       </label>
-      <p class="maintenance-warning full">
-        Existing vault items will be replaced. A failed restore leaves the current vault unchanged.
-      </p>
     </ModalShell>
   );
 }

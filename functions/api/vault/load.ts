@@ -1,7 +1,6 @@
 import {
   DEFAULT_VAULT_ID,
   checkVaultAuth,
-  ensureVaultTable,
   errorResponse,
   getDb,
   jsonResponse,
@@ -23,9 +22,11 @@ export async function onRequestGet({
 }) {
   try {
     const db = getDb(env);
-    await ensureVaultTable(db);
-
-    const authFailure = await checkVaultAuth(request, db, env);
+    // Auth stays a separate narrow query: selecting `payload` before the caller
+    // is authorized would hand every unauthenticated request a ~2MB D1 read.
+    const authFailure = await checkVaultAuth(request, db, env, {
+      requireVault: true,
+    });
     if (authFailure) return authFailure;
 
     const row = await db

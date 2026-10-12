@@ -3,16 +3,17 @@ import solid from "vite-plugin-solid";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const apiTarget = (env.VITE_API_BASE || "https://1pass.pages.dev")
+  const apiTarget = (env.VITE_API_BASE || "http://localhost:8788")
     .trim()
     .replace(/\/+$/, "");
 
   return {
     plugins: [solid()],
     server: {
-      // In local dev the SPA talks to /api on the Vite origin. Proxy those
-      // requests to the deployed Pages Functions so we avoid CORS failures
-      // when ALLOWED_ORIGIN is production-only.
+      // In local dev the SPA talks to /api on the Vite origin. By default the
+      // proxy forwards those requests to the local Pages dev server
+      // (`bun run pages-dev`, port 8788). Set VITE_API_BASE to point the proxy
+      // at a deployed site explicitly.
       proxy: {
         "/api": {
           target: apiTarget,

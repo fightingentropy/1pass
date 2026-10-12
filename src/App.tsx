@@ -1,4 +1,5 @@
 import {
+  batch,
   createEffect,
   createMemo,
   createSignal,
@@ -8,6 +9,7 @@ import {
   untrack,
 } from "solid-js";
 import {
+  isVaultEncryptedPayload,
   type VaultPayload,
 } from "../functions/api/vault/schema";
 import "./app.css";
@@ -18,8 +20,11 @@ import {
   type VaultSession,
 } from "./vaultCrypto";
 import {
+  ApiError,
   initVault,
   isConflictError,
+  isUnauthorizedError,
+  loadVaultRecord,
   readVaultMeta,
   saveVaultRecord,
 } from "./vault/api";
@@ -39,9 +44,9 @@ import AttachmentPreviewOverlay from "./vault/AttachmentPreviewOverlay";
 import { ApiKeyModal, CredentialModal, IdentityModal } from "./vault/Modals";
 import VaultWorkspace from "./vault/VaultWorkspace";
 import {
-  clearLegacyPasswordMeta,
   clearPendingRecovery,
   readPendingRecovery,
+  removeLegacyPasswordHash,
   storePendingRecovery,
   unlockVaultWithPassword,
 } from "./vault/lifecycle";
@@ -58,6 +63,9 @@ import {
 import { createVaultCrudController } from "./vault/crudController";
 import { createClipboardController } from "./vault/clipboardController";
 import { createAttachmentController } from "./vault/attachmentController";
+import { createNoticeController } from "./vault/noticeController";
+import { sweepOrphanedAttachments } from "./vault/orphanSweep";
+import Toast from "./vault/Toast";
 
 type GateView = "loading" | "setup" | "locked" | "unlocked";
 export default function App() {
@@ -72,7 +80,10 @@ export default function App() {
   const [activeSection, setActiveSection] = createSignal<VaultSection>("apiKeys");
   const [busy, setBusy] = createSignal(false);
   const [busyLabel, setBusyLabel] = createSignal("");
-  const [error, setError] = createSignal("");
+  const [gateError, setGateError] = createSignal("");
+  const [syncError, setSyncError] = createSignal("");
+  const [syncConflict, setSyncConflict] = createSignal(false);
+  const { notice, showNotice, dismissNotice } = createNoticeController();
   const [lastSaved, setLastSaved] = createSignal<number | null>(null);
   const [syncState, setSyncState] = createSignal<SyncState>("idle");
   const [query, setQuery] = createSignal("");
@@ -82,7 +93,6 @@ export default function App() {
   const [syncEnabled, setSyncEnabled] = createSignal(false);
   const [session, setSession] = createSignal<VaultSession | null>(null);
   const [serverRevision, setServerRevision] = createSignal(0);
-  const [requiresBootstrap, setRequiresBootstrap] = createSignal(true);
   const [persistedVaultJson, setPersistedVaultJson] = createSignal(
     JSON.stringify(createVaultDefault()),
   );
@@ -152,20 +162,20 @@ export default function App() {
     handleCopyApiKey,
     handleCopyField,
     handleCopySecret,
-  } = createClipboardController(setError);
+  } = createClipboardController((message) => showNotice(message, "error"));
 
   onMount(() => {
+    removeLegacyPasswordHash();
     void (async () => {
       setBusy(true);
-      setError("");
+      setGateError("");
 
       try {
         const meta = await readVaultMeta();
-        setRequiresBootstrap(Boolean(meta.requiresBootstrap));
         setView(meta.exists ? "locked" : "setup");
       } catch (statusError) {
         console.error(statusError);
-        setError(
+        setGateError(
           statusError instanceof Error
             ? statusError.message
             : "Unable to reach the vault service.",
@@ -272,7 +282,8 @@ export default function App() {
       setServerRevision(revision);
       clearPendingRecovery();
       setLastSaved(Date.now());
-      setError("");
+      setSyncError("");
+      setSyncConflict(false);
       if (JSON.stringify(vault()) === nextVaultJson) {
         setSyncState("idle");
       }
@@ -280,12 +291,16 @@ export default function App() {
     } catch (saveError) {
       if (thisVersion !== saveVersion) return true;
       console.error(saveError);
-      if (isConflictError(saveError)) {
-        setError(
-          "This vault changed in another tab or device. Lock and unlock again before saving.",
-        );
-      }
+      const conflict = isConflictError(saveError);
+      const message = conflict
+        ? "This vault changed in another tab or device. Choose “Reload vault” in the header to fetch the latest version."
+        : saveError instanceof ApiError
+          ? saveError.message
+          : "Unable to reach the vault service. Your changes stay in this tab until sync succeeds.";
+      setSyncConflict(conflict);
+      setSyncError(message);
       setSyncState("error");
+      showNotice(message, "error");
       return false;
     }
   };
@@ -312,6 +327,8 @@ export default function App() {
     handleOpenAttachment,
     handleDownloadAttachment,
     handleDeleteAttachment,
+    loadPreviewUrl,
+    migrateInlineThumbnails,
     resetAttachments,
   } = createAttachmentController({
     vault,
@@ -371,7 +388,7 @@ export default function App() {
   });
 
   const handleSetup = async (password: string, bootstrapSecret: string) => {
-    setError("");
+    setGateError("");
     setBusy(true);
     try {
       const freshVault = createVaultDefault();
@@ -382,20 +399,19 @@ export default function App() {
         nextSession.authToken,
         bootstrapSecret,
       );
-      clearLegacyPasswordMeta();
       setVault(freshVault);
       setSession(nextSession);
       setServerRevision(revision);
-      setRequiresBootstrap(false);
       setPersistedVaultJson(JSON.stringify(freshVault));
       setSyncEnabled(true);
       setSyncState("idle");
       setLastSaved(Date.now());
+      dismissNotice();
       setView("unlocked");
       lastActivityAt = Date.now();
     } catch (setupError) {
       console.error(setupError);
-      setError(
+      setGateError(
         setupError instanceof Error
           ? setupError.message
           : "Unable to initialize the vault. Try again.",
@@ -405,25 +421,35 @@ export default function App() {
     }
   };
 
-  const handleUnlock = async (password: string, bootstrapSecret: string) => {
-    setError("");
+  // Older releases kept image thumbnails inline in the encrypted envelope.
+  // Move them into their own encrypted files in the background; the regular
+  // debounced save then shrinks the vault.
+  const startThumbnailMigration = (activeSession: VaultSession) => {
+    void migrateInlineThumbnails(
+      () => session() === activeSession && !maintenanceLabel(),
+    )
+      .then(({ failed }) => {
+        if (failed > 0) {
+          console.error(
+            `${failed} inline thumbnail(s) could not be moved; retrying on the next unlock.`,
+          );
+        }
+      })
+      .catch((migrationError) => {
+        console.error("Thumbnail migration failed", migrationError);
+      });
+  };
+
+  const handleUnlock = async (password: string) => {
+    setGateError("");
     setBusy(true);
-    setBusyLabel("");
+    setBusyLabel("Unlocking…");
     try {
       const {
         session: nextSession,
         vault: remoteVault,
-        migrated,
         revision,
-      } = await unlockVaultWithPassword(password, bootstrapSecret, setBusyLabel, () =>
-        requestConfirm({
-          title: "Set master password?",
-          message:
-            "This vault predates encryption and this device has no record of its password. The password you just entered will become the vault's master password.",
-          confirmLabel: "Use this password",
-          danger: false,
-        }),
-      );
+      } = await unlockVaultWithPassword(password);
       let vaultToOpen = remoteVault;
       const pendingRecovery = readPendingRecovery();
       if (pendingRecovery) {
@@ -448,17 +474,39 @@ export default function App() {
       }
       setSession(nextSession);
       setServerRevision(revision);
-      setRequiresBootstrap(false);
       setVault(vaultToOpen);
       setPersistedVaultJson(JSON.stringify(remoteVault));
       setSyncEnabled(true);
       setSyncState("idle");
-      setLastSaved(migrated ? Date.now() : null);
+      setLastSaved(null);
+      dismissNotice();
       setView("unlocked");
       lastActivityAt = Date.now();
+      // Only the browser knows which file ids the vault references, so it
+      // removes committed-but-unreferenced files left behind by interrupted
+      // uploads or failed deletes. Recent commits are skipped in case another
+      // tab is still saving them.
+      void sweepOrphanedAttachments(vaultToOpen, nextSession)
+        .then((sweep) => {
+          if (session() !== nextSession) return;
+          if (sweep.failed > 0) {
+            showNotice(
+              `${sweep.failed} unreferenced encrypted file${sweep.failed === 1 ? "" : "s"} could not be removed. The cleanup is retried on the next unlock.`,
+              "error",
+            );
+          } else if (sweep.removed > 0) {
+            showNotice(
+              `Removed ${sweep.removed} unreferenced encrypted file${sweep.removed === 1 ? "" : "s"}.`,
+            );
+          }
+        })
+        .catch((sweepError) => {
+          console.error("Orphaned attachment sweep failed", sweepError);
+        });
+      startThumbnailMigration(nextSession);
     } catch (unlockError) {
       console.error(unlockError);
-      setError(
+      setGateError(
         unlockError instanceof Error
           ? unlockError.message
           : "Unable to unlock. Please retry.",
@@ -466,6 +514,111 @@ export default function App() {
     } finally {
       setBusy(false);
       setBusyLabel("");
+    }
+  };
+
+  // A conflict means the server holds a revision this tab has not seen. Fetch
+  // it with the live session instead of forcing a lock/unlock cycle, and when
+  // both sides changed let the user pick a side explicitly; cancelling keeps
+  // the vault out of sync rather than guessing.
+  const reloadVault = async () => {
+    const currentSession = session();
+    if (!currentSession || maintenanceLabel()) return;
+    saveVersion += 1;
+    if (saveTimer) {
+      window.clearTimeout(saveTimer);
+      saveTimer = undefined;
+    }
+    setMaintenanceLabel("Reloading vault…");
+    try {
+      const record = await loadVaultRecord(currentSession.authToken);
+      if (!isVaultEncryptedPayload(record.payload)) {
+        throw new Error("Vault data is corrupted.");
+      }
+      const remoteVault = normalizeVault(
+        await decryptVaultPayload(record.payload, currentSession),
+      );
+      const remoteJson = JSON.stringify(remoteVault);
+      const localJson = JSON.stringify(vault());
+      const localChanged =
+        localJson !== persistedVaultJson() && localJson !== remoteJson;
+
+      let decision: "server" | "local" | "cancel" = "server";
+      if (localChanged) {
+        setMaintenanceLabel("");
+        const useServer = await requestConfirm({
+          title: "Vault changed elsewhere",
+          message:
+            "This vault was changed in another tab or device while this tab has unsynced edits. Replace this tab's edits with the server version?",
+          confirmLabel: "Use server version",
+          danger: true,
+        });
+        if (useServer) {
+          decision = "server";
+        } else {
+          const overwrite = await requestConfirm({
+            title: "Keep this tab's edits?",
+            message:
+              "The changes made elsewhere will be overwritten with this tab's version on the next sync.",
+            confirmLabel: "Overwrite with my edits",
+            danger: true,
+          });
+          decision = overwrite ? "local" : "cancel";
+        }
+        setMaintenanceLabel("Reloading vault…");
+      }
+      if (decision === "cancel") {
+        showNotice("Reload cancelled. The vault is still out of sync.", "error");
+        return;
+      }
+
+      if (decision === "local") {
+        // The server copy becomes the base; this tab's edits re-sync on top.
+        batch(() => {
+          setServerRevision(record.revision);
+          setSyncConflict(false);
+          setSyncError("");
+          setPersistedVaultJson(remoteJson);
+          setSyncState("dirty");
+          setMaintenanceLabel("");
+        });
+        const saved = await persistVault();
+        if (saved) {
+          showNotice("Kept this tab's edits and synced them over the newer version.");
+        }
+        return;
+      }
+      batch(() => {
+        setServerRevision(record.revision);
+        setSyncConflict(false);
+        setSyncError("");
+        setVault(remoteVault);
+        setPersistedVaultJson(remoteJson);
+        setSyncState("idle");
+      });
+      showNotice(
+        localChanged
+          ? "Reloaded the newer version. This tab's edits were discarded."
+          : "Reloaded the latest version of the vault.",
+      );
+    } catch (reloadError) {
+      console.error(reloadError);
+      if (isUnauthorizedError(reloadError)) {
+        showNotice(
+          "The master password was changed on another device. Lock this vault and unlock it with the new password.",
+          "error",
+          { sticky: true },
+        );
+      } else {
+        showNotice(
+          reloadError instanceof Error
+            ? reloadError.message
+            : "Unable to reload the vault.",
+          "error",
+        );
+      }
+    } finally {
+      setMaintenanceLabel("");
     }
   };
 
@@ -529,14 +682,17 @@ export default function App() {
     setPasswordModalOpen(false);
     setImportFile(null);
     setImportPassword("");
-    setError(lockNotice);
+    setSyncError("");
+    setSyncConflict(false);
+    setGateError("");
+    if (lockNotice) showNotice(lockNotice, "info", { sticky: true });
+    else dismissNotice();
   };
 
   const handleExport = async () => {
     const currentSession = session();
     if (!currentSession || maintenanceLabel()) return;
     setMaintenanceLabel("Preparing backup…");
-    setError("");
     try {
       if (!(await persistVault())) {
         throw new Error("The latest vault changes must sync before exporting.");
@@ -557,10 +713,11 @@ export default function App() {
       window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
     } catch (exportError) {
       console.error(exportError);
-      setError(
+      showNotice(
         exportError instanceof Error
           ? exportError.message
           : "Unable to create the backup.",
+        "error",
       );
     } finally {
       setMaintenanceLabel("");
@@ -615,6 +772,8 @@ export default function App() {
       setImportPassword("");
       setSyncEnabled(true);
       syncPaused = false;
+      setMaintenanceLabel("");
+      startThumbnailMigration(currentSession);
 
       if (restored.cleanupFailures > 0) {
         setAttachmentError(
@@ -706,7 +865,7 @@ export default function App() {
           "The password changed, but some old encrypted file copies could not be cleaned up.",
         );
       }
-      setError("Master password changed successfully.");
+      showNotice("Master password changed successfully.");
     } catch (changeError) {
       console.error(changeError);
       setPasswordError(
@@ -876,7 +1035,8 @@ export default function App() {
             vault={vault()}
             activeSection={activeSection()}
             syncState={syncState()}
-            syncError={error()}
+            syncError={syncError()}
+            syncConflict={syncConflict()}
             lastSaved={lastSaved()}
             maintenanceLabel={maintenanceLabel()}
             query={query()}
@@ -899,8 +1059,8 @@ export default function App() {
               focusSearch = focus;
             }}
             onRetrySync={() => {
-              if (error().includes("another tab or device")) {
-                void handleLock({ auto: true });
+              if (syncConflict()) {
+                void reloadVault();
               } else {
                 void persistVault();
               }
@@ -937,6 +1097,7 @@ export default function App() {
             onDeleteAttachment={(identityId, attachment) =>
               void handleDeleteAttachment(identityId, attachment)
             }
+            onLoadPreview={loadPreviewUrl}
             onAddCredential={(identityId) =>
               handleOpenCredentialModal(identityId, null)
             }
@@ -952,14 +1113,11 @@ export default function App() {
             mode={view() as "loading" | "setup" | "locked"}
             busy={busy()}
             busyLabel={busyLabel()}
-            error={error()}
-            requiresBootstrap={requiresBootstrap()}
+            error={gateError()}
             onSetup={(password, bootstrapSecret) =>
               void handleSetup(password, bootstrapSecret)
             }
-            onUnlock={(password, bootstrapSecret) =>
-              void handleUnlock(password, bootstrapSecret)
-            }
+            onUnlock={(password) => void handleUnlock(password)}
           />
         </Show>
 
@@ -1058,6 +1216,8 @@ export default function App() {
           <ConfirmDialog request={request()} onClose={resolveConfirm} />
         )}
       </Show>
+
+      <Toast notice={notice()} onDismiss={dismissNotice} />
     </div>
   );
 }

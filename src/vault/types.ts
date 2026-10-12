@@ -1,5 +1,7 @@
 import type {
   VaultAttachment,
+  VaultAttachmentPreview,
+  VaultStoredFile,
   VaultCredential,
   VaultIdentityItem,
   VaultApiKeyItem,
@@ -72,8 +74,9 @@ export type SyncState = "idle" | "dirty" | "saving" | "error";
 
 export const ATTACHMENT_CHUNK_SIZE = 1_000_000;
 export const ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
-export const ATTACHMENT_THUMB_MAX_EDGE = 320;
-export const ATTACHMENT_THUMB_MAX_CHARS = 80_000;
+export const ATTACHMENT_PREVIEW_MAX_EDGE = 480;
+export const ATTACHMENT_PREVIEW_MAX_BYTES = 400_000;
+export const ATTACHMENT_PREVIEW_MIME = "image/jpeg";
 export const AUTO_LOCK_MS = 15 * 60 * 1000;
 export const CLIPBOARD_CLEAR_MS = 60 * 1000;
 export const SAVE_DEBOUNCE_MS = 600;
@@ -141,10 +144,10 @@ export function createCredentialDraft(): CredentialDraft {
   };
 }
 
-function normalizeAttachment(raw: unknown): VaultAttachment | null {
-  if (!raw || typeof raw !== "object") return null;
-  const partial = raw as Partial<VaultAttachment>;
-  if (typeof partial.id !== "string" || partial.id.length === 0) return null;
+// Normalizes the storage fields shared by attachments and their previews. A
+// v3 file with a malformed manifest keeps `envelopeVersion: 3` with empty
+// manifest fields, so every later read fails closed instead of skipping checks.
+function normalizeStoredFile(partial: Partial<VaultStoredFile>): VaultStoredFile {
   const chunks =
     typeof partial.chunks === "number" && partial.chunks > 0
       ? Math.min(64, Math.floor(partial.chunks))
@@ -164,20 +167,8 @@ function normalizeAttachment(raw: unknown): VaultAttachment | null {
     typeof partial.manifestMac === "string" &&
     /^[A-Za-z0-9+/]{43}=$/.test(partial.manifestMac);
   return {
-    id: partial.id,
-    name:
-      typeof partial.name === "string" && partial.name.length > 0
-        ? partial.name
-        : "file",
-    mimeType:
-      typeof partial.mimeType === "string" && partial.mimeType.length > 0
-        ? partial.mimeType
-        : "application/octet-stream",
-    size: typeof partial.size === "number" && partial.size > 0 ? partial.size : 0,
+    id: partial.id as string,
     chunks,
-    thumb: typeof partial.thumb === "string" ? partial.thumb : "",
-    createdAt:
-      typeof partial.createdAt === "number" ? partial.createdAt : Date.now(),
     ...(partial.envelopeVersion === 3
       ? {
           envelopeVersion: 3 as const,
@@ -187,6 +178,57 @@ function normalizeAttachment(raw: unknown): VaultAttachment | null {
         }
       : {}),
   };
+}
+
+function normalizePreview(raw: unknown): VaultAttachmentPreview | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const partial = raw as Partial<VaultAttachmentPreview>;
+  if (
+    typeof partial.id !== "string" ||
+    !/^[a-zA-Z0-9-]{1,64}$/.test(partial.id) ||
+    partial.envelopeVersion !== 3
+  ) {
+    return undefined;
+  }
+  return {
+    ...normalizeStoredFile(partial),
+    mimeType:
+      typeof partial.mimeType === "string" && partial.mimeType.startsWith("image/")
+        ? partial.mimeType
+        : ATTACHMENT_PREVIEW_MIME,
+    size: typeof partial.size === "number" && partial.size > 0 ? partial.size : 0,
+  };
+}
+
+function normalizeAttachment(raw: unknown): VaultAttachment | null {
+  if (!raw || typeof raw !== "object") return null;
+  const partial = raw as Partial<VaultAttachment>;
+  if (typeof partial.id !== "string" || partial.id.length === 0) return null;
+  const preview = normalizePreview(partial.preview);
+  return {
+    ...normalizeStoredFile(partial),
+    name:
+      typeof partial.name === "string" && partial.name.length > 0
+        ? partial.name
+        : "file",
+    mimeType:
+      typeof partial.mimeType === "string" && partial.mimeType.length > 0
+        ? partial.mimeType
+        : "application/octet-stream",
+    size: typeof partial.size === "number" && partial.size > 0 ? partial.size : 0,
+    thumb: typeof partial.thumb === "string" ? partial.thumb : "",
+    ...(preview ? { preview } : {}),
+    createdAt:
+      typeof partial.createdAt === "number" ? partial.createdAt : Date.now(),
+  };
+}
+
+// Every encrypted file an attachment owns on the server: the file itself and,
+// for images, its separately stored preview.
+export function attachmentFileIds(attachment: VaultAttachment) {
+  return attachment.preview
+    ? [attachment.id, attachment.preview.id]
+    : [attachment.id];
 }
 
 function normalizeCredential(raw: unknown): VaultCredential | null {
@@ -259,61 +301,18 @@ export function normalizeVault(payload: unknown): VaultPayload {
     return createVaultDefault();
   }
 
-  const partial = payload as Partial<VaultPayload> & {
-    profile?: {
-      fullName?: string;
-      preferredName?: string;
-      primaryAddress?: string;
-    };
-    contacts?: { primaryEmail?: string; phone?: string };
-  };
-
-  if (Array.isArray(partial.identities)) {
-    return {
-      identities: partial.identities.map((item) =>
-        normalizeIdentityItem(item as Partial<VaultIdentityItem>),
-      ),
-      apiKeys: Array.isArray(partial.apiKeys)
-        ? partial.apiKeys.map((item) =>
-            normalizeApiKeyItem(item as Partial<VaultApiKeyItem>),
-          )
-        : [],
-    };
-  }
-
-  const legacyName =
-    typeof partial.profile?.fullName === "string" &&
-    partial.profile.fullName.trim().length > 0
-      ? partial.profile.fullName.trim()
-      : typeof partial.profile?.preferredName === "string"
-        ? partial.profile.preferredName.trim()
-        : "";
-
-  if (!legacyName) {
-    return createVaultDefault();
-  }
-
-  const [firstName, ...rest] = legacyName.split(/\s+/);
+  const partial = payload as Partial<VaultPayload>;
   return {
-    identities: [
-      normalizeIdentityItem({
-        firstName: firstName ?? "",
-        lastName: rest.join(" "),
-        email:
-          typeof partial.contacts?.primaryEmail === "string"
-            ? partial.contacts.primaryEmail
-            : "",
-        phone:
-          typeof partial.contacts?.phone === "string"
-            ? partial.contacts.phone
-            : "",
-        address:
-          typeof partial.profile?.primaryAddress === "string"
-            ? partial.profile.primaryAddress
-            : "",
-      }),
-    ],
-    apiKeys: [],
+    identities: Array.isArray(partial.identities)
+      ? partial.identities.map((item) =>
+          normalizeIdentityItem(item as Partial<VaultIdentityItem>),
+        )
+      : [],
+    apiKeys: Array.isArray(partial.apiKeys)
+      ? partial.apiKeys.map((item) =>
+          normalizeApiKeyItem(item as Partial<VaultApiKeyItem>),
+        )
+      : [],
   };
 }
 
@@ -360,8 +359,12 @@ export function generatePassword(length = 20) {
   ).join("");
 }
 
-export async function createImageThumb(file: File): Promise<string> {
-  if (!file.type.startsWith("image/")) return "";
+// Renders a small JPEG for the file list. It is uploaded as its own encrypted
+// file; null for non-images, undecodable images, or an oversized result.
+export async function createImagePreview(
+  file: Blob,
+): Promise<Uint8Array<ArrayBuffer> | null> {
+  if (!file.type.startsWith("image/")) return null;
   const url = URL.createObjectURL(file);
   try {
     const image = await new Promise<HTMLImageElement>((resolve, reject) => {
@@ -373,7 +376,7 @@ export async function createImageThumb(file: File): Promise<string> {
 
     const scale = Math.min(
       1,
-      ATTACHMENT_THUMB_MAX_EDGE /
+      ATTACHMENT_PREVIEW_MAX_EDGE /
         Math.max(image.naturalWidth, image.naturalHeight),
     );
     const width = Math.max(1, Math.round(image.naturalWidth * scale));
@@ -382,14 +385,43 @@ export async function createImageThumb(file: File): Promise<string> {
     canvas.width = width;
     canvas.height = height;
     const context = canvas.getContext("2d");
-    if (!context) return "";
+    if (!context) return null;
     context.drawImage(image, 0, 0, width, height);
-    const thumb = canvas.toDataURL("image/jpeg", 0.72);
-    return thumb.length <= ATTACHMENT_THUMB_MAX_CHARS ? thumb : "";
+    const blob = await new Promise<Blob | null>((resolve) =>
+      canvas.toBlob(resolve, ATTACHMENT_PREVIEW_MIME, 0.8),
+    );
+    if (!blob || blob.size === 0 || blob.size > ATTACHMENT_PREVIEW_MAX_BYTES) {
+      return null;
+    }
+    return new Uint8Array(await blob.arrayBuffer());
   } catch {
-    return "";
+    return null;
   } finally {
     URL.revokeObjectURL(url);
+  }
+}
+
+// Decodes an inline thumbnail written by older releases (a base64 image data
+// URL) so it can be moved into its own encrypted preview file.
+export function inlineThumbToBytes(
+  thumb: string,
+): { bytes: Uint8Array<ArrayBuffer>; mimeType: string } | null {
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(
+    thumb,
+  );
+  if (!match) return null;
+  try {
+    const binary = atob(match[2]);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    if (bytes.length === 0 || bytes.length > ATTACHMENT_PREVIEW_MAX_BYTES) {
+      return null;
+    }
+    return { bytes, mimeType: match[1].toLowerCase() };
+  } catch {
+    return null;
   }
 }
 

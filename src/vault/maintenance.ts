@@ -27,7 +27,7 @@ import {
   saveVaultRecord,
   uploadEncryptedChunk,
 } from "./api";
-import { normalizeVault } from "./types";
+import { attachmentFileIds, normalizeVault } from "./types";
 
 type Progress = (label: string) => void;
 
@@ -54,12 +54,8 @@ export async function buildCompleteBackup(
   return createVaultBackup(
     vault,
     session,
-    (attachment, chunkIndex) =>
-      downloadAttachmentEncryptedChunk(
-        attachment.id,
-        chunkIndex,
-        session.authToken,
-      ),
+    (file, chunkIndex) =>
+      downloadAttachmentEncryptedChunk(file.id, chunkIndex, session.authToken),
     onProgress,
   );
 }
@@ -86,18 +82,18 @@ export async function restoreCompleteBackup(options: {
   options.onProgress("Decrypting backup…");
   const decoded = await decryptVaultBackup(backup, options.password);
   const replacedFileIds = options.currentVault.identities.flatMap((identity) =>
-    identity.attachments.map((attachment) => attachment.id),
+    identity.attachments.flatMap(attachmentFileIds),
   );
 
   const cloned = await cloneVaultAttachments({
     vault: decoded.vault,
     sourceSession: decoded.session,
     targetSession: options.currentSession,
-    readChunk: async (attachment, chunkIndex) => {
-      const chunks = decoded.attachments.get(attachment.id);
+    readChunk: async (file, chunkIndex, label) => {
+      const chunks = decoded.attachments.get(file.id);
       const chunk = chunks?.[chunkIndex];
       if (!chunk) {
-        throw new Error(`The backup is missing data for "${attachment.name}".`);
+        throw new Error(`The backup is missing data for "${label}".`);
       }
       return chunk;
     },
@@ -177,9 +173,9 @@ export async function rotateMasterPassword(options: {
     vault: options.vault,
     sourceSession: options.currentSession,
     targetSession: nextSession,
-    readChunk: (attachment, chunkIndex) =>
+    readChunk: (file, chunkIndex) =>
       downloadAttachmentEncryptedChunk(
-        attachment.id,
+        file.id,
         chunkIndex,
         options.currentSession.authToken,
       ),
